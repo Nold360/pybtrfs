@@ -1,0 +1,477 @@
+#!/usr/bin/env python
+
+from __future__ import print_function
+from __future__ import division
+
+import argparse
+import subprocess
+import os
+import sys
+import errno
+import copy
+
+# Handle Python 3 DBM module
+try:
+    import anydbm as dbm
+except ImportError:
+    import dbm
+
+# Deal with missing function from v2.6 subprocess module
+try:
+    from subprocess import check_output
+except ImportError:
+    def check_output(*popenargs, **kwargs):
+        r"""Run command with arguments and return its output as a byte string.
+
+        If the exit code was non-zero it raises a CalledProcessError.  The
+        CalledProcessError object will have the return code in the returncode
+        attribute and output in the output attribute.
+
+        The arguments are the same as for the Popen constructor. Example:
+
+        >>> check_output(["ls", "-l", "/dev/null"])
+        'crw-rw-rw- 1 root root 1, 3 Oct 18  2007 /dev/null\n'
+
+        The stdout argument is not allowed as it is used internally.
+        To capture standard error in the result, use stderr=STDOUT.
+
+        >>> check_output(["/bin/sh", "-c",
+        ...               "ls -l non_existent_file ; exit 0"],
+        ...              stderr=STDOUT)
+        'ls: non_existent_file: No such file or directory\n'
+        """
+        if 'stdout' in kwargs:
+            raise ValueError('stdout argument not allowed, it will be overridden.')
+        process = subprocess.Popen(stdout=subprocess.PIPE, *popenargs, **kwargs)
+        output, unused_err = process.communicate()
+        retcode = process.poll()
+        if retcode:
+            cmd = kwargs.get("args")
+            if cmd is None:
+                cmd = popenargs[0]
+            raise subprocess.CalledProcessError(retcode, cmd)
+        return output
+
+multiplicator_lookup = ['B', 'K', 'M', 'G', 'T', 'P']
+LIMIT_DBM_FILE = '/var/lib/misc/pybtrfs_qgroup_limit.dbm'
+BTRFS = '/sbin/btrfs'
+DF = '/bin/df'
+progname = os.path.basename(sys.argv[0])
+
+def parse_qgroup_show_args():
+    parser = argparse.ArgumentParser(prog=progname+' qgroup show',
+        description='Gives quotas from a BTRFS filesystem in a readable form'
+    )
+    parser.add_argument(
+        '--unit', metavar='U', type=str,
+        default='G',
+        help='SI Unit, [B]ytes, K, M, G, T, P',
+    )
+    parser.add_argument(
+        'mount_point', metavar='PATH', type=str,
+        default='/',
+        help='BTRFS mount point',
+    )
+    sys.argv.pop(2)
+    sys.argv.pop(1)
+    result = dict()
+    result = parser.parse_args()
+    return result
+
+
+def get_limit(db, path_key):
+    if (not db):
+        return None
+    if (path_key is None):
+        return None
+    if (path_key[0] == '@'):
+        path_key = '/' + path_key[1:]
+    elif path_key[0] != '/':
+        path_key = '/' + path_key
+    try:
+        limit = db[path_key]
+        unit = limit[-1]
+        amount = int(limit[:-1])
+        limit = amount * 1024 ** multiplicator_lookup.index(unit)
+    except:
+        limit = None
+    return limit
+
+def do_qgroup_show(parse_args):
+
+    try:
+        db = dbm.open(LIMIT_DBM_FILE, 'r')
+    except dbm.error:
+        db = None
+    except (OSError, IOError) as exc:
+        if (errno == errno.ENOENT):
+            db = None
+        else:
+            raise exc
+
+    subvolume_data = dict()
+    cmd = [BTRFS,  "subvolume", "list", parse_args.mount_point]
+    for line in check_output(cmd).splitlines():
+        args = line.strip().split(' ')
+        subvolume_data[int(args[1])] = args[-1]
+
+    print("subvol\t\t\t\t    group         total       limit    unshared")
+    print("-" * 79)
+    cmd = [BTRFS, "qgroup", "show", parse_args.mount_point]
+    for line in check_output(cmd).splitlines():
+        args = [x for x in line.strip().split(' ') if len(x)>0]
+
+        try:
+            subvolume_id = args[0].split('/')[-1]
+            subvolume_name = subvolume_data[int(subvolume_id)]
+        except:
+            subvolume_name = "(unknown)"
+
+        # Get limit out of DBM file
+        subvol = subvolume_data.get(int(subvolume_id))
+        limit = get_limit(db, subvol)
+        if (limit is None):
+            limit = '--'
+            limit_unit = '-'
+        else:
+            limit_unit = parse_args.unit
+
+        multiplicator = 1024 ** multiplicator_lookup.index(parse_args.unit)
+
+        try:
+            try:
+                total = "%02.2f" % (float(args[1]) / multiplicator)
+                unshared = "%02.2f" % (float(args[2]) / multiplicator)
+                if (limit != '--'):
+                    limit = "%02.2f" % (float(limit) / multiplicator)
+            except ValueError:
+                continue
+            
+            format_args = [
+                subvolume_name.ljust(30),
+                str(args[0]).rjust(10),
+                total.rjust(10), parse_args.unit,
+                limit.rjust(10), limit_unit,
+                unshared.rjust(10), parse_args.unit
+            ]
+            print("%s  %s  %s%s %s%s %s%s" % tuple(format_args))
+        except IndexError:
+            pass
+    if db:
+        db.close()
+    return 0
+
+def parse_qgroup_limit_args():
+    parser = argparse.ArgumentParser(prog=progname+' qgroup limit',
+        description='Set qgroup limits on a BTRFS file system subvolume'
+    )
+    parser.add_argument(
+        '-c', action='store_const', const='-c',
+        help='limit amount of data after compression. This is the default, ' \
+         'it is currently not possible to turn off this option.',
+    )
+    parser.add_argument(
+        '-e', action='store_const', const='-e',
+        help='limit space exclusively assigned to this qgroup',
+    )
+    parser.add_argument(
+        'size', metavar='SIZE|none', type=str,
+        default='none',
+        help='qgroup size limit',
+    )
+    parser.add_argument(
+        'qgroupid', metavar='qgroupid', type=str, nargs='?',
+        default=None,
+        help='qgroup size limit',
+    )
+    parser.add_argument(
+        'mount_point', metavar='PATH', type=str,
+        default='/',
+        help='BTRFS mount point',
+    )
+
+    sys.argv.pop(2)
+    sys.argv.pop(1)
+    result = parser.parse_args()
+    return result
+
+def do_qgroup_limit(parse_args):
+
+    cmd = [BTRFS, 'qgroup', 'limit']
+    if parse_args.e:
+        cmd.append(parse_args.e)
+    if parse_args.c:
+        cmd.append(parse_args.c)
+    cmd.append(parse_args.size)
+    if parse_args.qgroupid:
+        cmd.append(parse_args.qgroupid)
+    cmd.append(parse_args.mount_point)
+    exit_code = subprocess.check_call(cmd)
+  
+    if (exit_code != 0):
+        sys.exit(exit_code)
+
+    db = dbm.open(LIMIT_DBM_FILE, 'c')
+    if (parse_args.size and parse_args.size != 'none'):
+        db[parse_args.mount_point] = parse_args.size.upper()
+    elif (not parse_args.size or parse_args.size == 'none'):
+        try:
+            db.pop(parse_args.mount_point)
+        except KeyError:
+            pass
+    db.close()
+
+    return exit_code
+
+def parse_qgroup_prune_args():
+    parser = argparse.ArgumentParser(prog=progname+' qgroup prune',
+        description='Prune unattached qgroups from a BTRFS file system'
+    )
+    parser.add_argument(
+        'mount_point', metavar='PATH', type=str,
+        default='/',
+        help='BTRFS mount point',
+    )
+
+    sys.argv.pop(2)
+    sys.argv.pop(1)
+    result = parser.parse_args()
+    return result
+
+def do_qgroup_prune(parse_args):
+    
+    subvolume_names = dict()
+    subvolume_data = dict()
+    cmd = ["btrfs",  "subvolume", "list", parse_args.mount_point]
+    for line in check_output(cmd).splitlines():
+        args = line.strip().split(' ')
+        subvolume_data[int(args[1])] = args[-1]
+
+    cmd = ["btrfs", "qgroup", "show", parse_args.mount_point]
+    for line in check_output(cmd).splitlines():
+        args = [x for x in line.strip().split(' ') if len(x)>0]
+
+        try:
+            subvolume_id = args[0].split('/')[-1]
+            subvolume_name = subvolume_data[int(subvolume_id)]
+        except:
+            subvolume_name = None
+        
+        if (not subvolume_name):
+            subprocess.check_call([BTRFS, 'qgroup', 'destroy', args[0], 
+                parse_args.mount_point])
+        else:
+            subvolume_names[subvolume_name] = subvolume_id
+        
+    # Prune DBM file
+    db = dbm.open(LIMIT_DBM_FILE, 'c')
+    existing_subvols = subvolume_names.keys()
+    delete_subvols = []
+    for k, v in db.iteritems():
+        if (k[1:] in existing_subvols):
+            continue
+        delete_subvols.push(k)
+    for k in delete_subvols:
+        db.pop(k)
+    db.close()
+    return 0
+
+def parse_df_args():
+    """
+    Pybtrfs df argument handling
+    """
+    parser = argparse.ArgumentParser(prog=progname+' df',
+        description='Df including BTRFS Metadata, Data, and System space',
+        conflict_handler='resolve'
+    )
+    parser.add_argument(
+        '-l', '--local', action='store_true',
+        help='Only do local file systems',
+    )
+    parser.add_argument(
+        '-h', '--human-readable', action='store_true',
+        help='Human readable output GiB/MiB/KiB',
+    )
+    parser.add_argument(
+        '-H', '--si', action='store_true',
+        help='Human readable output GB/MB/KB',
+    )
+    parser.add_argument(
+        '-m', '--megabytes', action='store_true',
+        help='Human readable output MiB',
+    )
+    parser.add_argument(
+        '-T', '--print-type', action='store_true',
+        help='Output file system type',
+    )
+    parser.add_argument(
+        '-B', '--block-size', action='store',
+        nargs='?',
+        help='Scales output by SIZE B/K/M/G/T',
+    )
+    parser.add_argument(
+        '-t', '--type', action='store',
+        nargs='?', default='all',
+        help='File system type',
+    )
+    parser.add_argument(
+        'path', metavar='PATH', type=str,
+        #default='/', nargs='?',
+        nargs='?',
+        help='Path for df',
+    )
+
+    sys.argv.pop(1)
+    result = parser.parse_args()
+    return result
+
+def do_df(parse_args):
+    """
+    Pybtrfs df action.  This is the business end where df output and btrfs
+    output are evaluated and intermingled.
+    """
+    def convert_args(parse_args, working_set):
+        """
+        Convert input parse_args into idf_arg_list
+        """
+        df_arg_list = []
+        arg_dict = parse_args.__dict__
+        for k in arg_dict.keys():
+            if (k == 'human_readable'):
+                if arg_dict[k]:
+                    df_arg_list.append('-h')
+            elif (k == 'local'):
+                if arg_dict[k]:
+                    df_arg_list.append('-l')
+            elif (k == 'si'):
+                if arg_dict[k]:
+                    df_arg_list.append('-H')
+            elif (k =='print_type'):
+                if arg_dict[k]:
+                    df_arg_list.append('-T')
+            elif (k =='megabytes'):
+                if arg_dict[k]:
+                    df_arg_list.append('-m')
+            elif (k == 'block_size'):
+                if arg_dict[k]:
+                    if (arg_dict[k] not in multiplicator_lookup):
+                        print('%s: Block size must be one of %s.' \
+                                % (progname, 
+                                  str(multiplicator_lookup).strip("[]").replace("'", "")),
+                                file=sys.stderr)
+                        sys.exit(os.EX_USAGE)
+                    df_arg_list.extend(('-B', arg_dict[k]))
+            elif (k == 'type'):
+                if (arg_dict[k] and arg_dict[k] != 'all'):
+                    df_arg_list.extend(('-t', arg_dict[k]))
+
+        # Append file system argument if given
+        if (arg_dict['path']):
+            df_arg_list.append(arg_dict['path'])
+
+        working_set['df_arg_list'] = df_arg_list
+
+        return 0
+
+    def run_df(parse_args, working_set):
+        """
+        Run df with -T, capture out put
+        """
+        # Work out args to give to df
+        cmd = [DF, '-T']
+        cmd.extend(working_set['df_arg_list'])
+        try:
+            process = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                                stderr=None,
+                                bufsize=1, close_fds=True, )
+            (df_output, df_stderr) = process.communicate()
+            retcode = process.poll()
+            if retcode:
+                sys.exit(retcode)
+                
+        except (OSError, IOError) as exc:
+            print("%s: %s - %s." % (progname, cmd[0], exc.strerror), file=sys.stderr)
+            if (exc.errno in (errno.EACCES, errno.EEXIST)):
+                sys.exit(os.EX_OSFILE)
+            elif (exc.errno in (errno.EPERM,)):
+                sys.exit(os.EX_NOPERM)
+            else:
+                sys.exit(os.EX_OSERR)
+
+        df_output = df_output.splitlines()
+        df_header = df_output[0]
+        df_output = [x for x in df_output if x[0] == '/']
+        df_output.insert(0, df_header)
+        df_output = [x.split(None, 6) for x in df_output]
+        working_set['df_output'] = df_output
+        
+        import pdb; pdb.set_trace()
+        filesystem = {}
+        for fs in df_output[1:]:
+            filesystem[fs[0]] = dict(zip(df_output[0], fs))
+
+        return 0
+
+    def display_output(parse_args, working_set):
+        """
+        Display congolmerated output
+        """
+        for line in working_set["df_output"]:
+            if not len(line):
+                continue
+            print(line, file=sys.stdout)
+        return 0
+
+
+    working_set = dict()
+
+    convert_args(parse_args, working_set)
+
+    # 1) Run df with -T, capture out put
+    exit_code = run_df(parse_args, working_set)
+
+
+    # 2) Get mount points
+
+    # 3) For each btrfs FS run btrfs filesystem df
+
+    # 4) Analyse btrfs fi df output
+
+    # 5) Put into df output
+
+    # 6) For each btfrs FS run btrfs qgroup show
+
+    # 7) Analyse btrfs qgroup show output
+
+    # 8) Insert output into congolmerated output
+
+    # 9) Display congolmerated output
+    display_output(parse_args, working_set)
+
+    return exit_code
+
+if (os.geteuid() != 0):
+    print("%s: You need to be at least suid root to run this program." % progname,
+            file=sys.stderr)
+    sys.exit(os.EX_NOPERM)
+
+argc = len(sys.argv)
+argv = sys.argv
+if (argc >= 3 and  argv[1] == 'qgroup' and argv[2] == 'limit'):
+    parse_args = parse_qgroup_limit_args()
+    exit_code = do_qgroup_limit(parse_args)
+elif (argc >= 3 and argv[1] =='qgroup' and argv[2] == 'show'):
+    parse_args = parse_qgroup_show_args()
+    exit_code = do_qgroup_show(parse_args)
+elif (argc >= 3 and argv[1] =='qgroup' and argv[2] == 'prune'):
+    parse_args = parse_qgroup_prune_args()
+    exit_code = do_qgroup_prune(parse_args)
+elif (argc >= 2 and argv[1] == 'df'):
+    parse_args = parse_df_args()
+    exit_code = do_df(parse_args)
+else:
+    exit_code = os.execvpe(BTRFS, argv, os.environ)
+
+sys.exit(exit_code)
+    
+
