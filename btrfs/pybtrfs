@@ -9,6 +9,7 @@ import os
 import sys
 import errno
 import copy
+import re
 
 # Handle Python 3 DBM module
 try:
@@ -398,17 +399,24 @@ def do_df(parse_args):
             else:
                 sys.exit(os.EX_OSERR)
 
+        size_re = re.compile(r'^(\S+\s+\S+\s+)(\S+)(\s+.*)$')
+        available_re = re.compile(r'^(\S+\s+\S+\s+\S+\s+\S+\s+)(\S+)(\s+.*)$')
         df_output = df_output.splitlines()
         df_header = df_output[0]
+        df_header_sizeword = size_re.sub(r'\2', df_header)
+        df_header = size_re.sub(r'\1Size\3', df_header)
+        df_header_availableword = available_re.sub(r'\2', df_header)
+        df_header = available_re.sub(r'\1Available\3', df_header)
         df_output = [x for x in df_output if x[0] == '/']
         df_output.insert(0, df_header)
         df_output = [x.split(None, 6) for x in df_output]
-        working_set['df_output'] = df_output
         
-        import pdb; pdb.set_trace()
-        filesystem = {}
+        df_output_dict = {'df_header': dict(zip(df_output[0], df_output[0]))}
+        df_output_dict['df_header']['Size'] = df_header_sizeword
+        df_output_dict['df_header']['Available'] = df_header_availableword
         for fs in df_output[1:]:
-            filesystem[fs[0]] = dict(zip(df_output[0], fs))
+            df_output_dict[fs[0]] = dict(zip(df_output[0], fs))
+        working_set['df_output_dict'] = df_output_dict
 
         return 0
 
@@ -416,10 +424,61 @@ def do_df(parse_args):
         """
         Display congolmerated output
         """
-        for line in working_set["df_output"]:
-            if not len(line):
-                continue
-            print(line, file=sys.stdout)
+        max_len = {}
+        df_header = working_set["df_output_dict"]['df_header']
+        df_arg_list = working_set['df_arg_list']
+        max_len = dict([(k, len(df_header[k])) for k in df_header])
+        for k in working_set["df_output_dict"]:
+            fs = working_set["df_output_dict"][k]
+            max_len = dict([(k2, max(max_len[k2], len(fs[k2]))) for k2 in fs])
+
+        df_header = working_set['df_output_dict']['df_header']
+
+        if (not '-T' in df_arg_list and not '--print-type' in df_arg_list):
+            print('%s %s %s %s %s %s' 
+                % ( df_header['Filesystem'].ljust(max(max_len['Filesystem'], 14)),
+                    df_header['Size'].rjust(max_len['Size']),
+                    df_header['Used'].rjust(max_len['Used']),
+                    df_header['Available'].rjust(max_len['Available']),
+                    df_header['Use%'].rjust(max_len['Use%']),
+                    df_header['Mounted on'].rjust(max_len['Mounted on'])
+                    ), file=sys.stdout)
+            for k in working_set["df_output_dict"]:
+                if (k == 'df_header'):
+                    continue
+                fs = working_set["df_output_dict"][k]
+                print('%s %s %s %s %s %s' 
+                    % ( fs['Filesystem'].ljust(max(max_len['Filesystem'], 14)),
+                        fs['Size'].rjust(max_len['Size']),
+                        fs['Used'].rjust(max_len['Used']),
+                        fs['Available'].rjust(max_len['Available']),
+                        fs['Use%'].rjust(max_len['Use%']),
+                        fs['Mounted on'].ljust(max_len['Mounted on'])
+                        ), file=sys.stdout)
+        else:
+            print('%s %s %s %s %s %s %s'
+                % ( df_header['Filesystem'].ljust(max(max_len['Filesystem'], 14)),
+                    df_header['Type'].ljust(max_len['Type']),
+                    df_header['Size'].rjust(max_len['Size']),
+                    df_header['Used'].rjust(max_len['Used']),
+                    df_header['Available'].rjust(max_len['Available']),
+                    df_header['Use%'].rjust(max_len['Use%']),
+                    df_header['Mounted on'].rjust(max_len['Mounted on'])
+                    ), file=sys.stdout)
+            for k in working_set["df_output_dict"]:
+                if (k == 'df_header'):
+                    continue
+                fs = working_set["df_output_dict"][k]
+                print('%s %s %s %s %s %s %s'
+                    % ( fs['Filesystem'].ljust(max(max_len['Filesystem'], 14)),
+                        fs['Type'].ljust(max_len['Type']),
+                        fs['Size'].rjust(max_len['Size']),
+                        fs['Used'].rjust(max_len['Used']),
+                        fs['Available'].rjust(max_len['Available']),
+                        fs['Use%'].rjust(max_len['Use%']),
+                        fs['Mounted on'].ljust(max_len['Mounted on'])
+                        ), file=sys.stdout)
+                
         return 0
 
 
