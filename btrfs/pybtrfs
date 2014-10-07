@@ -98,6 +98,32 @@ def get_limit(db, path_key):
         limit = None
     return limit
 
+def cmd_stdout(cmd):
+    try:
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE,
+                            stderr=None,
+                            bufsize=1, close_fds=True, )
+        (cmd_output, cmd_stderr) = process.communicate()
+        retcode = process.poll()
+        if retcode:
+            if cmd_stderr:
+                print(cmd_stderr, file=sys.stderr)
+            sys.exit(retcode)
+            
+    except (OSError, IOError) as exc:
+        print("%s: %s - %s." % (progname, cmd[0], exc.strerror), file=sys.stderr)
+        if (exc.errno in (errno.EACCES, errno.EEXIST)):
+            sys.exit(os.EX_OSFILE)
+        elif (exc.errno in (errno.EPERM,)):
+            sys.exit(os.EX_NOPERM)
+        else:
+            sys.exit(os.EX_OSERR)
+    if cmd_stderr:
+        print(cmd_stderr, file=sys.stderr)
+
+    return cmd_output
+        
+
 def do_qgroup_show(parse_args):
 
     try:
@@ -243,12 +269,12 @@ def do_qgroup_prune(parse_args):
     
     subvolume_names = dict()
     subvolume_data = dict()
-    cmd = ["btrfs",  "subvolume", "list", parse_args.mount_point]
+    cmd = [BTRFS,  "subvolume", "list", parse_args.mount_point]
     for line in check_output(cmd).splitlines():
         args = line.strip().split(' ')
         subvolume_data[int(args[1])] = args[-1]
 
-    cmd = ["btrfs", "qgroup", "show", parse_args.mount_point]
+    cmd = [BTRFS, "qgroup", "show", parse_args.mount_point]
     for line in check_output(cmd).splitlines():
         args = [x for x in line.strip().split(' ') if len(x)>0]
 
@@ -277,6 +303,89 @@ def do_qgroup_prune(parse_args):
     db.close()
     return 0
 
+def format_bytes(bytes, block_size, pwr3_base):
+    """
+    Take bytes, and produce printable string output
+    """
+
+class UnitAction(argparse.Action):
+    unit = 'K'
+    pwr3_base = 1024
+
+    def __init__(self, option_strings, dest, **kwargs):
+        #import pdb; pdb.set_trace()
+        super(UnitAction, self).__init__(option_strings, dest, **kwargs)
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        # print '%r %r %r' % (namespace, values, option_string)
+        # setattr(namespace, self.dest, values)
+
+        unit = self.unit
+        pwr3_base = self.pwr3_base
+
+        if values and type(values) in (list, tuple):
+            block_size = values[0]
+        elif values:
+            block_size = values
+        else:
+            block_size = None
+
+        if (option_string in ('-B', '--block-size')):
+            if (block_size == '1000000000000000000'):
+                unit = 'E'
+                pwr3_base = 1000
+            elif (block_size == '1000000000000000'):
+                unit = 'P'
+                pwr3_base = 1000
+            elif (block_size == '1000000000000'):
+                unit = 'T'
+                pwr3_base = 1000
+            elif (block_size == '1000000000'):
+                unit = 'G'
+                pwr3_base = 1000
+            elif (block_size == '1000000'):
+                unit = 'M'
+                pwr3_base = 1000
+            elif (block_size == '1000'):
+                unit = 'K'
+                pwr3_base = 1000
+            elif (len(block_size) == 3 and (block_size[0] in multiplicator_lookup) 
+                    and block_size[1:-1] == 'iB'):
+                unit = block_size[0]
+                pwr3_base = 1024
+            elif (len(block_size) == 2 and (block_size[0] in multiplicator_lookup) 
+                    and block_size[1] == 'B'):
+                unit = block_size[0]
+                pwr3_base = 1000
+            elif (len(block_size) == 1 and (block_size[0] in multiplicator_lookup)):
+                unit = block_size[0]
+                pwr3_base = 1024
+            else:
+                print("%s: incorrect -B/--blocksize argument '%s' - see man (1) df SIZE" 
+                        % (progname, block_size));
+                sys.exit(os.EX_USAGE)
+            value = unit
+        elif (option_string in ('-m', '--megabytes')):
+            value = True
+            unit = 'M'
+            pwr3_base = 1024
+        elif (option_string in ('-k', '--kilobytes')):
+            value = True
+            unit = 'K'
+            pwr3_base = 1024
+        elif (option_string in ('-h', '--human-readable')):
+            value = True
+            unit = ''
+            pwr3_base = 1024
+        elif (option_string in ('-H', '--si')):
+            value = True
+            unit = ''
+            pwr3_base = 1000
+        
+        setattr(namespace, self.dest, value)
+        setattr(namespace, 'unit', unit)
+        setattr(namespace, 'pwr3_base', pwr3_base)
+
 def parse_df_args():
     """
     Pybtrfs df argument handling
@@ -290,23 +399,27 @@ def parse_df_args():
         help='Only do local file systems',
     )
     parser.add_argument(
-        '-h', '--human-readable', action='store_true',
+        '-h', '--human-readable', nargs='?',  action=UnitAction, default=False,
         help='Human readable output GiB/MiB/KiB',
     )
     parser.add_argument(
-        '-H', '--si', action='store_true',
+        '-H', '--si', action=UnitAction, nargs='?', default=False,
         help='Human readable output GB/MB/KB',
     )
     parser.add_argument(
-        '-m', '--megabytes', action='store_true',
+        '-m', '--megabytes', nargs='?', action=UnitAction, default=False,
         help='Human readable output MiB',
+    )
+    parser.add_argument(
+        '-k', '--kilobytes', nargs='?', action=UnitAction, default=False,
+        help='Human readable output KiB',
     )
     parser.add_argument(
         '-T', '--print-type', action='store_true',
         help='Output file system type',
     )
     parser.add_argument(
-        '-B', '--block-size', action='store',
+        '-B', '--block-size', action=UnitAction, default=None,
         nargs='?',
         help='Scales output by SIZE B/K/M/G/T',
     )
@@ -323,8 +436,9 @@ def parse_df_args():
     )
 
     sys.argv.pop(1)
-    result = parser.parse_args()
-    return result
+    parse_args = parser.parse_args()
+    # Process and determine unit for results
+    return parse_args
 
 def do_df(parse_args):
     """
@@ -333,7 +447,7 @@ def do_df(parse_args):
     """
     def convert_args(parse_args, working_set):
         """
-        Convert input parse_args into idf_arg_list
+        Convert input parse_args into df_arg_list
         """
         df_arg_list = []
         arg_dict = parse_args.__dict__
@@ -381,24 +495,7 @@ def do_df(parse_args):
         # Work out args to give to df
         cmd = [DF, '-T']
         cmd.extend(working_set['df_arg_list'])
-        try:
-            process = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                                stderr=None,
-                                bufsize=1, close_fds=True, )
-            (df_output, df_stderr) = process.communicate()
-            retcode = process.poll()
-            if retcode:
-                sys.exit(retcode)
-                
-        except (OSError, IOError) as exc:
-            print("%s: %s - %s." % (progname, cmd[0], exc.strerror), file=sys.stderr)
-            if (exc.errno in (errno.EACCES, errno.EEXIST)):
-                sys.exit(os.EX_OSFILE)
-            elif (exc.errno in (errno.EPERM,)):
-                sys.exit(os.EX_NOPERM)
-            else:
-                sys.exit(os.EX_OSERR)
-
+        df_output = cmd_stdout(cmd)
         size_re = re.compile(r'^(\S+\s+\S+\s+)(\S+)(\s+.*)$')
         available_re = re.compile(r'^(\S+\s+\S+\s+\S+\s+\S+\s+)(\S+)(\s+.*)$')
         df_output = df_output.splitlines()
@@ -419,6 +516,118 @@ def do_df(parse_args):
         working_set['df_output_dict'] = df_output_dict
 
         return 0
+
+    def get_btrfs_mounts(parse_args, working_set):
+        """
+        Get btrfs mount points
+        """
+        btrfs_list = []
+        for k in working_set["df_output_dict"]:
+            fs = working_set["df_output_dict"][k]
+            if fs['Type'] != 'btrfs':
+                continue
+            btrfs_list.append(fs)
+        working_set['btrfs_list'] = btrfs_list
+        return 0
+
+    def to_bytes(amount):
+        if amount[-1] in multiplicator_lookup:
+            unit = amount[-1]
+            amount = float(amount[:-1])
+        else:
+            unit = 'B'
+            amount = float(amount)
+        bytes = amount * 1024 ** multiplicator_lookup.index(unit)
+        return bytes
+
+    def map_eval(o):
+        o['used'] = to_bytes(o['used'])
+        o['total'] =  to_bytes(o['total'])
+        o['use_%'] = (100 * (o['used']/o['total']))
+        return(o)
+
+    def do_btrfs_fi_df(parse_args, working_set):
+        """
+        3) For each btrfs FS run btrfs filesystem df
+
+        4) Analyse btrfs fi df output
+
+        5) Put into df output
+        """
+
+        for fs in working_set['btrfs_list']:
+            # For each btrfs FS run btrfs filesystem df
+            cmd = [BTRFS, 'filesystem', 'df', fs['Mounted on']]
+            btrfs_output = cmd_stdout(cmd)
+            btrfs_output = btrfs_output.splitlines()
+
+            output = []
+            for line in btrfs_output:
+                
+                # Parse a line
+                tag, rest = line.split(':')
+                tag = tag.strip()
+                total, used = rest.split(',')
+                total = total.strip()
+                used = used.strip()
+                if total.lower().find('used') != -1:
+                    tmp = used
+                    used = total
+                    total = tmp
+                thing, total = total.split('=')
+                total = total.rstrip('Bi')
+                thing, used = used.split('=')
+                used = used.rstrip('Bi')
+            
+                # Store
+                output.append({'tag': tag, 'used': used, 'total': total})
+
+            # Process into bytes and % used
+            output = [map_eval(o) for o in output]
+            # Sort, greatest usage first - uses a mapped function
+            def fn_sort(o,p): return(cmp(o['use_%'], p['use_%']));
+            output.sort(fn_sort, reverse=True)
+
+            # determine results - System, then Metadata, then Data
+            output2 = []
+            system = [ o for o in output if (o['tag'].lower().find('system') != -1) ]
+            if len(system):
+                system = system[0]
+                system['tag'] = 'system'
+            else:
+                system = system
+
+            metadata = [ o for o in output if (o['tag'].lower().find('metadata') != -1) ]
+            if len(metadata):
+                metadata = metadata[0]
+                metadata['tag'] = 'metadata'
+            else:
+                metadata = metadata
+
+            # Difference of tag 'Data' from 'Metadata' - always starts with 'D'
+            data = [ o for o in output if (o['tag'].find('Data') != -1) ]
+            if len(data):
+                data = data[0]
+                data['tag'] = 'data'
+            else:
+                data = data
+            
+            output2.append(system)
+            output2.append(metadata)
+            output2.append(data)
+            output = output2
+            import pdb; pdb.set_trace()
+
+            # Put results into df output
+            
+
+
+
+            
+
+
+
+
 
     def display_output(parse_args, working_set):
         """
@@ -489,23 +698,20 @@ def do_df(parse_args):
     # 1) Run df with -T, capture out put
     exit_code = run_df(parse_args, working_set)
 
-
-    # 2) Get mount points
+    # 2) Get btrfs mount points
+    exit_code = get_btrfs_mounts(parse_args, working_set)
 
     # 3) For each btrfs FS run btrfs filesystem df
-
     # 4) Analyse btrfs fi df output
-
     # 5) Put into df output
+    exit_code = do_btrfs_fi_df(parse_args, working_set)
 
     # 6) For each btfrs FS run btrfs qgroup show
-
     # 7) Analyse btrfs qgroup show output
-
     # 8) Insert output into congolmerated output
 
     # 9) Display congolmerated output
-    display_output(parse_args, working_set)
+    exit_code = display_output(parse_args, working_set)
 
     return exit_code
 
