@@ -10,6 +10,7 @@ import sys
 import errno
 import copy
 import re
+import math
 
 # Handle Python 3 DBM module
 try:
@@ -54,6 +55,7 @@ except ImportError:
         return output
 
 multiplicator_lookup = ['B', 'K', 'M', 'G', 'T', 'P']
+BLK_FORMAT="%01.0f"
 LIMIT_DBM_FILE = '/var/lib/misc/pybtrfs_qgroup_limit.dbm'
 BTRFS = '/sbin/btrfs'
 DF = '/bin/df'
@@ -167,10 +169,10 @@ def do_qgroup_show(parse_args):
 
         try:
             try:
-                total = "%02.2f" % (float(args[1]) / multiplicator)
-                unshared = "%02.2f" % (float(args[2]) / multiplicator)
+                total = BLK_FORMAT % (float(args[1]) / multiplicator)
+                unshared = BLK_FORMAT % (float(args[2]) / multiplicator)
                 if (limit != '--'):
-                    limit = "%02.2f" % (float(limit) / multiplicator)
+                    limit = BLK_FORMAT % (float(limit) / multiplicator)
             except ValueError:
                 continue
             
@@ -303,17 +305,30 @@ def do_qgroup_prune(parse_args):
     db.close()
     return 0
 
-def format_bytes(bytes, block_size, pwr3_base):
+def format_bytes(bytes, pwr3_base, unit):
     """
     Take bytes, and produce printable string output
     """
+    if not unit:
+        pwr_of = int(math.log(bytes, pwr3_base))
+        unit = multiplicator_lookup[pwr_of]
+    else:
+        pwr_of = multiplicator_lookup.index(unit)
+
+    if (pwr3_base == 1000):
+        unit += 'B'
+    out_num = bytes / pwr3_base ** pwr_of
+    if unit:
+        out_string = (BLK_FORMAT % out_num)
+    else:
+        out_string = (BLK_FORMAT % out_num) + unit
+    return (out_string)
 
 class UnitAction(argparse.Action):
     unit = 'K'
     pwr3_base = 1024
 
     def __init__(self, option_strings, dest, **kwargs):
-        #import pdb; pdb.set_trace()
         super(UnitAction, self).__init__(option_strings, dest, **kwargs)
 
     def __call__(self, parser, namespace, values, option_string=None):
@@ -438,6 +453,14 @@ def parse_df_args():
     sys.argv.pop(1)
     parse_args = parser.parse_args()
     # Process and determine unit for results
+    try:
+        thing = getattr(parse_args, 'unit')
+    except AttributeError:
+        setattr(parse_args, 'unit', 'K')
+    try:
+        thing = getattr(parse_args, 'pwr3_base')
+    except AttributeError:
+        setattr(parse_args, 'pwr3_base', 1024)
     return parse_args
 
 def do_df(parse_args):
@@ -449,42 +472,8 @@ def do_df(parse_args):
         """
         Convert input parse_args into df_arg_list
         """
-        df_arg_list = []
-        arg_dict = parse_args.__dict__
-        for k in arg_dict.keys():
-            if (k == 'human_readable'):
-                if arg_dict[k]:
-                    df_arg_list.append('-h')
-            elif (k == 'local'):
-                if arg_dict[k]:
-                    df_arg_list.append('-l')
-            elif (k == 'si'):
-                if arg_dict[k]:
-                    df_arg_list.append('-H')
-            elif (k =='print_type'):
-                if arg_dict[k]:
-                    df_arg_list.append('-T')
-            elif (k =='megabytes'):
-                if arg_dict[k]:
-                    df_arg_list.append('-m')
-            elif (k == 'block_size'):
-                if arg_dict[k]:
-                    if (arg_dict[k] not in multiplicator_lookup):
-                        print('%s: Block size must be one of %s.' \
-                                % (progname, 
-                                  str(multiplicator_lookup).strip("[]").replace("'", "")),
-                                file=sys.stderr)
-                        sys.exit(os.EX_USAGE)
-                    df_arg_list.extend(('-B', arg_dict[k]))
-            elif (k == 'type'):
-                if (arg_dict[k] and arg_dict[k] != 'all'):
-                    df_arg_list.extend(('-t', arg_dict[k]))
-
-        # Append file system argument if given
-        if (arg_dict['path']):
-            df_arg_list.append(arg_dict['path'])
-
-        working_set['df_arg_list'] = df_arg_list
+        # working_set['df_arg_list'] = df_arg_list
+        working_set['df_arg_list'] = sys.argv[1:]
 
         return 0
 
@@ -616,18 +605,83 @@ def do_df(parse_args):
             output2.append(metadata)
             output2.append(data)
             output = output2
-            import pdb; pdb.set_trace()
+
+            # Scale bytes -> output
+            pwr3_base = parse_args.pwr3_base
+            unit = parse_args.unit
+            for line  in output:
+                line['available'] = line['total'] - line['used']
+                line['used'] = format_bytes(line['used'], pwr3_base, unit)
+                line['total'] = format_bytes(line['total'], pwr3_base, unit)
+                line['available'] = format_bytes(line['available'], pwr3_base, unit)
+                line['use_%'] = "%01.0f" % line['use_%'] + '%'
 
             # Put results into df output
-            
+            df_output_dict = working_set['df_output_dict']
+            for line in output:
+                fs_mounted_on = fs['Mounted on']
+                if fs_mounted_on == '/':
+                    out_mounted_on = fs_mounted_on + line['tag'].upper()
+                else:
+                    out_mounted_on = fs_mounted_on + '/' + line['tag'].upper()
+
+                out_dict = {'Size': line['total'],
+                        'Used': line['used'],
+                        'Use%': line['use_%'],
+                        'Filesystem': fs['Filesystem'] + '/' + line['tag'].upper(),
+                        'Available': line['available'],
+                        'Mounted on': out_mounted_on,
+                        'Type': fs['Type']
+                        }
+                df_output_dict[out_dict['Filesystem']] = out_dict
+
+    def do_btrfs_qgroup_show(parse_args, working_set):
+        """
+        6) For each btfrs FS run btrfs qgroup show
+        7) Analyse btrfs qgroup show output
+        8) Insert output into congolmerated output
+        """
+
+        # See if btrfs has 'qgroup' support
+        cmd = [BTRFS, 'help']
+        btrfs_output = cmd_stdout(cmd)
+        if not btrfs_output.find('gqroup'):
+            return 0
+
+        # Add subvolumes to list of btrfs file systems
+        for fs in working_set['btrfs_list']:
+            pass
 
 
+#        for fs in working_set['btrfs_list']:
+#            # For each btrfs FS run btrfs filesystem df
+#            cmd = [BTRFS, 'qgroup', 'show', fs['Mounted on']]
+#            btrfs_output = cmd_stdout(cmd)
+#            btrfs_output = btrfs_output.splitlines()
+#
+#            output = []
+#            for line in btrfs_output:
+#                
+#                # Parse a line
+#                tag, rest = line.split(':')
+#                tag = tag.strip()
+#                total, used = rest.split(',')
+#                total = total.strip()
+#                used = used.strip()
+#                if total.lower().find('used') != -1:
+#                    tmp = used
+#                    used = total
+#                    total = tmp
+#                thing, total = total.split('=')
+#                total = total.rstrip('Bi')
+#                thing, used = used.split('=')
+#                used = used.rstrip('Bi')
+#            
+#                # Store
+#                output.append({'tag': tag, 'used': used, 'total': total})
+#
 
-            
-
-
-
-
+        pass
 
     def display_output(parse_args, working_set):
         """
@@ -643,6 +697,7 @@ def do_df(parse_args):
 
         df_header = working_set['df_output_dict']['df_header']
 
+
         if (not '-T' in df_arg_list and not '--print-type' in df_arg_list):
             print('%s %s %s %s %s %s' 
                 % ( df_header['Filesystem'].ljust(max(max_len['Filesystem'], 14)),
@@ -652,7 +707,7 @@ def do_df(parse_args):
                     df_header['Use%'].rjust(max_len['Use%']),
                     df_header['Mounted on'].rjust(max_len['Mounted on'])
                     ), file=sys.stdout)
-            for k in working_set["df_output_dict"]:
+            for k in sorted(working_set["df_output_dict"].keys()):
                 if (k == 'df_header'):
                     continue
                 fs = working_set["df_output_dict"][k]
@@ -674,7 +729,7 @@ def do_df(parse_args):
                     df_header['Use%'].rjust(max_len['Use%']),
                     df_header['Mounted on'].rjust(max_len['Mounted on'])
                     ), file=sys.stdout)
-            for k in working_set["df_output_dict"]:
+            for k in sorted(working_set["df_output_dict"].keys()):
                 if (k == 'df_header'):
                     continue
                 fs = working_set["df_output_dict"][k]
@@ -709,6 +764,7 @@ def do_df(parse_args):
     # 6) For each btfrs FS run btrfs qgroup show
     # 7) Analyse btrfs qgroup show output
     # 8) Insert output into congolmerated output
+    exit_code = do_btrfs_qgroup_show(parse_args, working_set)
 
     # 9) Display congolmerated output
     exit_code = display_output(parse_args, working_set)
