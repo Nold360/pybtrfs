@@ -11,6 +11,7 @@ import errno
 import copy
 import re
 import math
+import atexit
 
 # Handle Python 3 DBM module
 try:
@@ -60,6 +61,7 @@ LIMIT_DBM_FILE = '/var/lib/misc/pybtrfs_qgroup_limit.dbm'
 BTRFS = '/sbin/btrfs'
 DF = '/bin/df'
 progname = os.path.basename(sys.argv[0])
+db = None    
 
 def parse_qgroup_show_args():
     parser = argparse.ArgumentParser(prog=progname+' qgroup show',
@@ -81,8 +83,33 @@ def parse_qgroup_show_args():
     result = parser.parse_args()
     return result
 
+def close_db():
+    """
+    Clean up open dbm data base
+    """
 
-def get_limit(db, path_key):
+    global db
+    
+    if db:
+        db.close()
+    return None
+
+atexit.register(close_db)
+
+def get_limit(path_key):
+    
+    global db
+
+    try:
+        db = dbm.open(LIMIT_DBM_FILE, 'r')
+    except dbm.error:
+        db = None
+    except (OSError, IOError) as exc:
+        if (errno == errno.ENOENT):
+            db = None
+        else:
+            raise exc
+
     if (not db):
         return None
     if (path_key is None):
@@ -128,16 +155,6 @@ def cmd_stdout(cmd):
 
 def do_qgroup_show(parse_args):
 
-    try:
-        db = dbm.open(LIMIT_DBM_FILE, 'r')
-    except dbm.error:
-        db = None
-    except (OSError, IOError) as exc:
-        if (errno == errno.ENOENT):
-            db = None
-        else:
-            raise exc
-
     subvolume_data = dict()
     cmd = [BTRFS,  "subvolume", "list", parse_args.mount_point]
     for line in check_output(cmd).splitlines():
@@ -158,7 +175,7 @@ def do_qgroup_show(parse_args):
 
         # Get limit out of DBM file
         subvol = subvolume_data.get(int(subvolume_id))
-        limit = get_limit(db, subvol)
+        limit = get_limit(subvol)
         if (limit is None):
             limit = '--'
             limit_unit = '-'
@@ -186,8 +203,7 @@ def do_qgroup_show(parse_args):
             print("%s  %s  %s%s %s%s %s%s" % tuple(format_args))
         except IndexError:
             pass
-    if db:
-        db.close()
+    
     return 0
 
 def parse_qgroup_limit_args():
@@ -645,43 +661,37 @@ def do_df(parse_args):
         # See if btrfs has 'qgroup' support
         cmd = [BTRFS, 'help']
         btrfs_output = cmd_stdout(cmd)
-        if not btrfs_output.find('gqroup'):
+        if not btrfs_output.find('qgroup'):
             return 0
 
-        # Add subvolumes to list of btrfs file systems
         for fs in working_set['btrfs_list']:
-            pass
 
+            subvolume_data = dict()
+            cmd = [BTRFS,  "subvolume", "list", fs['Mounted on']]
+            for line in check_output(cmd).splitlines():
+                args = line.strip().split(' ')
+                subvolume_data[int(args[1])] = args[-1]
 
-#        for fs in working_set['btrfs_list']:
-#            # For each btrfs FS run btrfs filesystem df
-#            cmd = [BTRFS, 'qgroup', 'show', fs['Mounted on']]
-#            btrfs_output = cmd_stdout(cmd)
-#            btrfs_output = btrfs_output.splitlines()
-#
-#            output = []
-#            for line in btrfs_output:
-#                
-#                # Parse a line
-#                tag, rest = line.split(':')
-#                tag = tag.strip()
-#                total, used = rest.split(',')
-#                total = total.strip()
-#                used = used.strip()
-#                if total.lower().find('used') != -1:
-#                    tmp = used
-#                    used = total
-#                    total = tmp
-#                thing, total = total.split('=')
-#                total = total.rstrip('Bi')
-#                thing, used = used.split('=')
-#                used = used.rstrip('Bi')
-#            
-#                # Store
-#                output.append({'tag': tag, 'used': used, 'total': total})
-#
+            cmd = [BTRFS, "qgroup", "show", fs['Mounted on']]
+            for line in check_output(cmd).splitlines():
+                args = [x for x in line.strip().split(' ') if len(x)>0]
 
-        pass
+                try:
+                    subvolume_id = args[0].split('/')[-1]
+                except:
+                    # Go on to next one
+                    continue
+
+                # Get limit out of DBM file
+                subvol = subvolume_data.get(int(subvolume_id))
+                limit = get_limit(subvol)
+                if (limit is None):
+                    continue
+
+                #import pdb; pdb.set_trace()
+                # Now have limit, and and total used in subvolume qgroup,
+                # We can create line for df output.
+
 
     def display_output(parse_args, working_set):
         """
