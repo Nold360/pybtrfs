@@ -684,7 +684,7 @@ def do_df(parse_args):
         # See if btrfs has 'qgroup' support
         cmd = [BTRFS, 'help']
         btrfs_output = cmd_stdout(cmd)
-        if not btrfs_output.find('qgroup'):
+        if (btrfs_output.find('qgroup') == -1):
             return 0
 
         for fs in working_set['btrfs_list']:
@@ -692,12 +692,12 @@ def do_df(parse_args):
             output = []
             subvolume_data = dict()
             cmd = [BTRFS,  "subvolume", "list", fs['Mounted on']]
-            for line in check_output(cmd).splitlines():
+            for line in cmd_stdout(cmd).splitlines():
                 args = line.strip().split(' ')
                 subvolume_data[int(args[1])] = args[-1]
 
             cmd = [BTRFS, "qgroup", "show", fs['Mounted on']]
-            for line in check_output(cmd).splitlines():
+            for line in cmd_stdout(cmd).splitlines():
                 args = [x for x in line.strip().split(' ') if len(x)>0]
 
                 try:
@@ -747,6 +747,19 @@ def do_df(parse_args):
             df_output_dict = working_set['df_output_dict']
             for line in output:
                 df_output_dict[line['Filesystem']] = line
+
+#    def do_btrfs_filesystem_show(parse_args, working_set):
+#        """
+#        Display btrfs fs show output if df output
+#        """
+#        cmd = [BTRFS,'filesystem', 'show']
+#        cmd_output = cmd_stdout(cmd).splitlines()
+#
+#        for line in cmd_output:
+#
+#        
+#        pass
+
 
     def display_output(parse_args, working_set):
         """
