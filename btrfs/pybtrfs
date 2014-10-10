@@ -19,6 +19,17 @@ try:
 except ImportError:
     import dbm
 
+multiplicator_lookup = ['B', 'K', 'M', 'G', 'T', 'P']
+BLK_FORMAT="%01.0f"
+SMALL_BLK_FORMAT="%01.1f"
+PERC_FORMAT="%01.0f"
+LIMIT_DBM_FILE = '/var/lib/misc/pybtrfs_qgroup_limit.dbm'
+BTRFS = '/sbin/btrfs'
+DF = '/bin/df'
+progname = os.path.basename(sys.argv[0])
+db = None    
+
+
 # Deal with missing function from v2.6 subprocess module
 try:
     from subprocess import check_output
@@ -54,14 +65,6 @@ except ImportError:
                 cmd = popenargs[0]
             raise subprocess.CalledProcessError(retcode, cmd)
         return output
-
-multiplicator_lookup = ['B', 'K', 'M', 'G', 'T', 'P']
-BLK_FORMAT="%01.0f"
-LIMIT_DBM_FILE = '/var/lib/misc/pybtrfs_qgroup_limit.dbm'
-BTRFS = '/sbin/btrfs'
-DF = '/bin/df'
-progname = os.path.basename(sys.argv[0])
-db = None    
 
 def parse_qgroup_show_args():
     parser = argparse.ArgumentParser(prog=progname+' qgroup show',
@@ -321,28 +324,38 @@ def do_qgroup_prune(parse_args):
     db.close()
     return 0
 
-def format_bytes(bytes, pwr3_base, unit):
+def format_bytes(bytes, pwr3_base, unit, human_output):
     """
     Take bytes, and produce printable string output
     """
-    if not unit:
+    unit_output = False
+    if human_output:
+        unit_output = True
         pwr_of = int(math.log(bytes, pwr3_base))
         unit = multiplicator_lookup[pwr_of]
-    else:
+    elif unit:
+        unit_output = False
         pwr_of = multiplicator_lookup.index(unit)
 
-    if (pwr3_base == 1000):
+    if (unit and pwr3_base == 1000 and not human_output):
+        unit_output = True
         unit += 'B'
     out_num = bytes / pwr3_base ** pwr_of
-    if unit:
-        out_string = (BLK_FORMAT % out_num)
+    
+    blk_format = BLK_FORMAT
+    if (out_num < 10):
+        blk_format = SMALL_BLK_FORMAT
+
+    if unit_output:
+        out_string = (blk_format % out_num) + unit
     else:
-        out_string = (BLK_FORMAT % out_num) + unit
+        out_string = (blk_format % out_num)
     return (out_string)
 
 class UnitAction(argparse.Action):
     unit = 'K'
     pwr3_base = 1024
+    human_output = False
 
     def __init__(self, option_strings, dest, **kwargs):
         super(UnitAction, self).__init__(option_strings, dest, **kwargs)
@@ -353,6 +366,7 @@ class UnitAction(argparse.Action):
 
         unit = self.unit
         pwr3_base = self.pwr3_base
+        human_output = self.human_output
 
         if values and type(values) in (list, tuple):
             block_size = values[0]
@@ -407,15 +421,18 @@ class UnitAction(argparse.Action):
         elif (option_string in ('-h', '--human-readable')):
             value = True
             unit = ''
+            human_output = True
             pwr3_base = 1024
         elif (option_string in ('-H', '--si')):
             value = True
+            human_output = True
             unit = ''
             pwr3_base = 1000
         
         setattr(namespace, self.dest, value)
         setattr(namespace, 'unit', unit)
         setattr(namespace, 'pwr3_base', pwr3_base)
+        setattr(namespace, 'human_output', human_output)
 
 def parse_df_args():
     """
@@ -439,11 +456,11 @@ def parse_df_args():
     )
     parser.add_argument(
         '-m', '--megabytes', nargs='?', action=UnitAction, default=False,
-        help='Human readable output MiB',
+        help='Output MiB',
     )
     parser.add_argument(
         '-k', '--kilobytes', nargs='?', action=UnitAction, default=False,
-        help='Human readable output KiB',
+        help='Output KiB',
     )
     parser.add_argument(
         '-T', '--print-type', action='store_true',
@@ -477,6 +494,10 @@ def parse_df_args():
         thing = getattr(parse_args, 'pwr3_base')
     except AttributeError:
         setattr(parse_args, 'pwr3_base', 1024)
+    try:
+        thing = getattr(parse_args, 'human_output')
+    except AttributeError:
+        setattr(parse_args, 'human_output', False)
     return parse_args
 
 def do_df(parse_args):
@@ -625,12 +646,14 @@ def do_df(parse_args):
             # Scale bytes -> output
             pwr3_base = parse_args.pwr3_base
             unit = parse_args.unit
+            human_output = parse_args.human_output
             for line  in output:
                 line['available'] = line['total'] - line['used']
-                line['used'] = format_bytes(line['used'], pwr3_base, unit)
-                line['total'] = format_bytes(line['total'], pwr3_base, unit)
-                line['available'] = format_bytes(line['available'], pwr3_base, unit)
-                line['use_%'] = "%01.0f" % line['use_%'] + '%'
+                line['used'] = format_bytes(line['used'], pwr3_base, unit, human_output)
+                line['total'] = format_bytes(line['total'], pwr3_base, unit, human_output)
+                line['available'] = format_bytes(line['available'], pwr3_base, unit, 
+                                            human_output)
+                line['use_%'] = PERC_FORMAT % line['use_%'] + '%'
 
             # Put results into df output
             df_output_dict = working_set['df_output_dict']
@@ -644,7 +667,7 @@ def do_df(parse_args):
                 out_dict = {'Size': line['total'],
                         'Used': line['used'],
                         'Use%': line['use_%'],
-                        'Filesystem': fs['Filesystem'] + '/' + line['tag'].upper(),
+                        'Filesystem': fs['Filesystem'] + '|' + line['tag'].upper(),
                         'Available': line['available'],
                         'Mounted on': out_mounted_on,
                         'Type': fs['Type']
@@ -666,6 +689,7 @@ def do_df(parse_args):
 
         for fs in working_set['btrfs_list']:
 
+            output = []
             subvolume_data = dict()
             cmd = [BTRFS,  "subvolume", "list", fs['Mounted on']]
             for line in check_output(cmd).splitlines():
@@ -677,7 +701,9 @@ def do_df(parse_args):
                 args = [x for x in line.strip().split(' ') if len(x)>0]
 
                 try:
+                    subvolume_fullid = args[0]
                     subvolume_id = args[0].split('/')[-1]
+                    subvolume_name = subvolume_data[int(subvolume_id)]
                 except:
                     # Go on to next one
                     continue
@@ -688,10 +714,39 @@ def do_df(parse_args):
                 if (limit is None):
                     continue
 
-                #import pdb; pdb.set_trace()
+                total = int(args[1])
+                unshared = int(args[2])
+
                 # Now have limit, and and total used in subvolume qgroup,
                 # We can create line for df output.
+                if (fs['Mounted on'] == '/'):
+                    mounted_on = fs['Mounted on'] + subvolume_name
+                else:
+                    mounted_on = fs['Mounted on'] + '/' + subvolume_name
+                file_system = fs['Filesystem'] + ':' + subvolume_fullid
 
+                output.append({'Mounted on': mounted_on,
+                    'Filesystem': file_system,
+                    'Used': unshared,
+                    'Size': limit,
+                    'Available': limit - unshared,
+                    'Type': fs['Type'],
+                    'Use%': 100 * float(unshared/limit),
+                    })
+
+            pwr3_base = parse_args.pwr3_base
+            unit = parse_args.unit
+            human_output = parse_args.human_output
+            for line in output:
+                line['Use%'] = PERC_FORMAT % line['Use%'] + '%'
+                line['Used'] = format_bytes(line['Used'], pwr3_base, unit, human_output)
+                line['Size'] = format_bytes(line['Size'], pwr3_base, unit, human_output)
+                line['Available'] = format_bytes(line['Available'], pwr3_base, unit, 
+                                        human_output)
+
+            df_output_dict = working_set['df_output_dict']
+            for line in output:
+                df_output_dict[line['Filesystem']] = line
 
     def display_output(parse_args, working_set):
         """
