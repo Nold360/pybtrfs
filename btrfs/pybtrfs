@@ -723,7 +723,7 @@ def do_df(parse_args):
                     mounted_on = fs['Mounted on'] + subvolume_name
                 else:
                     mounted_on = fs['Mounted on'] + '/' + subvolume_name
-                file_system = fs['Filesystem'] + ':' + subvolume_fullid
+                file_system = fs['Filesystem'] + ';' + subvolume_fullid
 
                 output.append({'Mounted on': mounted_on,
                     'Filesystem': file_system,
