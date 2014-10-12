@@ -552,7 +552,10 @@ def do_df(parse_args):
             fs = working_set["df_output_dict"][k]
             if fs['Type'] != 'btrfs':
                 continue
+            # find real file system device
+            fs['real_dev'] = os.path.realpath(fs['Filesystem'])
             btrfs_list.append(fs)
+
         working_set['btrfs_list'] = btrfs_list
         return 0
 
@@ -667,7 +670,7 @@ def do_df(parse_args):
                 out_dict = {'Size': line['total'],
                         'Used': line['used'],
                         'Use%': line['use_%'],
-                        'Filesystem': fs['Filesystem'] + '|' + line['tag'].upper(),
+                        'Filesystem': fs['Filesystem'] + '/' + line['tag'].upper(),
                         'Available': line['available'],
                         'Mounted on': out_mounted_on,
                         'Type': fs['Type']
@@ -723,7 +726,7 @@ def do_df(parse_args):
                     mounted_on = fs['Mounted on'] + subvolume_name
                 else:
                     mounted_on = fs['Mounted on'] + '/' + subvolume_name
-                file_system = fs['Filesystem'] + ';' + subvolume_fullid
+                file_system = fs['Filesystem'] + '/' + subvolume_fullid
 
                 output.append({'Mounted on': mounted_on,
                     'Filesystem': file_system,
@@ -748,18 +751,59 @@ def do_df(parse_args):
             for line in output:
                 df_output_dict[line['Filesystem']] = line
 
-#    def do_btrfs_filesystem_show(parse_args, working_set):
-#        """
-#        Display btrfs fs show output if df output
-#        """
-#        cmd = [BTRFS,'filesystem', 'show']
-#        cmd_output = cmd_stdout(cmd).splitlines()
-#
-#        for line in cmd_output:
-#
-#        
-#        pass
+    def do_btrfs_filesystem_show(parse_args, working_set):
+        """
+        Display btrfs fs show output if df output
+        """
+        # Get real BTRFS mount points
+        for fs in working_set['btrfs_list']:
+            cmd = [BTRFS,'filesystem', 'show', fs['real_dev']]
+            cmd_output = cmd_stdout(cmd).splitlines()
+            output = {}
+            if (fs['Mounted on'] == '/'):
+                mounted_on = '/' + 'BLOCK'
+            else:
+                mounted_on = fs['Mounted on'] + '/' + 'BLOCK'
 
+            # Count number of devices
+            count = 0
+            for line in cmd_output:
+                if line.find('devid') != -1: 
+                    count += 1
+            for line in cmd_output:
+                if (line.find('devid') == -1):
+                    continue
+                device = {}
+                line = line.split()
+                device['Size'] = to_bytes(line[3].rstrip('Bi'))
+                device['Used'] = to_bytes(line[5].rstrip('Bi'))
+                device['Available'] = device['Size'] - device['Used']
+                device['Use%'] = 100 * float(device['Used']/device['Size'])
+                device['real_dev'] = line[7]
+                device['Type'] = 'btrfs'
+                if (count == 1):
+                    device['Filesystem'] = fs['Filesystem'] + '/' + 'BLOCK'
+                else:
+                    device['Filesystem'] = device['real_dev'] + '/' + 'BLOCK'
+                device['Mounted on'] = mounted_on
+                output[device['Filesystem']] = device
+
+            # Convert bytes to units
+            pwr3_base = parse_args.pwr3_base
+            unit = parse_args.unit
+            human_output = parse_args.human_output
+            for dev in output:
+                line = output[dev]
+                line['Use%'] = PERC_FORMAT % line['Use%'] + '%'
+                line['Used'] = format_bytes(line['Used'], pwr3_base, unit, human_output)
+                line['Size'] = format_bytes(line['Size'], pwr3_base, unit, human_output)
+                line['Available'] = format_bytes(line['Available'], pwr3_base, unit, 
+                                        human_output)
+
+            # Insert into output dict
+            df_output_dict = working_set['df_output_dict']
+            for device in output:
+                df_output_dict[line['Filesystem']] = line
 
     def display_output(parse_args, working_set):
         """
@@ -771,7 +815,8 @@ def do_df(parse_args):
         max_len = dict([(k, len(df_header[k])) for k in df_header])
         for k in working_set["df_output_dict"]:
             fs = working_set["df_output_dict"][k]
-            max_len = dict([(k2, max(max_len[k2], len(fs[k2]))) for k2 in fs])
+            max_len = dict([(k2, max(max_len[k2], len(fs[k2]))) for k2 in fs 
+                                                    if k2 != 'real_dev'])
 
         df_header = working_set['df_output_dict']['df_header']
 
@@ -843,6 +888,9 @@ def do_df(parse_args):
     # 7) Analyse btrfs qgroup show output
     # 8) Insert output into congolmerated output
     exit_code = do_btrfs_qgroup_show(parse_args, working_set)
+
+    # Do btrfs file system show
+    exit_code = do_btrfs_filesystem_show(parse_args, working_set)
 
     # 9) Display congolmerated output
     exit_code = display_output(parse_args, working_set)
