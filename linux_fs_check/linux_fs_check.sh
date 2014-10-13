@@ -16,7 +16,7 @@
 #MAILTO="matt.grant@foodstuffs-si.co.nz"
 MAILTO="itbasissupport@foodstuffs-si.co.nz"
 MAILTO_DEBUG="matt.grant@foodstuffs-si.co.nz"
-DEBUG="1"       # set to any value to turn debug on
+DEBUG=""       # set to any value to turn debug on
 TIME=`date`
 HOSTNAME=`hostname`
 
