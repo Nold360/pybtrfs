@@ -164,10 +164,18 @@ def do_qgroup_show(parse_args):
         args = line.strip().split(' ')
         subvolume_data[int(args[1])] = args[-1]
 
+    
+    cmd = [BTRFS, "qgroup", "show", parse_args.mount_point]
+    try:
+        cmd_output =  check_output(cmd, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as exc:
+        print("%s: btrfs quota not enabled on '%s'" % (progname, parse_args.mount_point),
+                file=sys.stderr)
+        sys.exit(exc.returncode)
+
     print("subvol\t\t\t\t    group         total       limit    unshared")
     print("-" * 79)
-    cmd = [BTRFS, "qgroup", "show", parse_args.mount_point]
-    for line in check_output(cmd).splitlines():
+    for line in cmd_output.splitlines():
         args = [x for x in line.strip().split(' ') if len(x)>0]
 
         try:
@@ -290,13 +298,23 @@ def do_qgroup_prune(parse_args):
     
     subvolume_names = dict()
     subvolume_data = dict()
+
+
+    cmd = [BTRFS, "qgroup", "show", parse_args.mount_point]
+    try:
+        cmd_output = check_output(cmd, stderr=subprocess.STDOUT)
+    except subprocess.CalledProcessError as exc:
+        print("%s: btrfs quota not enabled on '%s'" % (progname, parse_args.mount_point),
+                file=sys.stderr)
+        sys.exit(exc.returncode)
+
+
     cmd = [BTRFS,  "subvolume", "list", parse_args.mount_point]
     for line in check_output(cmd).splitlines():
         args = line.strip().split(' ')
         subvolume_data[int(args[1])] = args[-1]
 
-    cmd = [BTRFS, "qgroup", "show", parse_args.mount_point]
-    for line in check_output(cmd).splitlines():
+    for line in icmd_output.splitlines():
         args = [x for x in line.strip().split(' ') if len(x)>0]
 
         try:
@@ -691,6 +709,12 @@ def do_df(parse_args):
             return 0
 
         for fs in working_set['btrfs_list']:
+            
+            try:
+                cmd = [BTRFS, 'qgroup', 'show', fs['Mounted on']]
+                subprocess.check_call(cmd)
+            except subprocess.CalledProcessError as exc:
+                continue
 
             output = []
             subvolume_data = dict()
