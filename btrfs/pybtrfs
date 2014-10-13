@@ -463,6 +463,10 @@ def parse_df_args():
         conflict_handler='resolve'
     )
     parser.add_argument(
+        '-A', '--btrfs-all', action='store_true',
+        help="All BTRFS metadata/system/data details"
+    )
+    parser.add_argument(
         '-l', '--local', action='store_true',
         help='Only do local file systems',
     )
@@ -502,7 +506,6 @@ def parse_df_args():
         nargs='?',
         help='Path for df',
     )
-
     sys.argv.pop(1)
     parse_args = parser.parse_args()
     # Process and determine unit for results
@@ -603,6 +606,9 @@ def do_df(parse_args):
 
         5) Put into df output
         """
+
+        if (not parse_args.btrfs_all):
+            return os.EX_OK
 
         for fs in working_set['btrfs_list']:
             # For each btrfs FS run btrfs filesystem df
