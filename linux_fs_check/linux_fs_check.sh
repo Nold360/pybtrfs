@@ -1,7 +1,7 @@
 #!/bin/sh
 # SCRIPT: linux_fs_check.sh
-# AUTHOR: George R
-# DATE: 180514
+# AUTHOR: George R and Mat Grant
+# DATE: 20141014
 # LAST CHANGE:
 # FUNCTION: Check filelist % full for an Linux system
 # Make a list of filesystems (excluding NFS and CIFS mounts)
@@ -28,14 +28,17 @@ DF_MAX_PERCENT=90  # default warning value
 # specially check any filesystems in this list against given value
 # format is "/filesystem,80" additional entries should be on a new line
 DF_EXCEPTION_LIST=""
+# Do extensive BTRFS checks - extra DF argument
+DF_BTRFS_CHECK_ALL="--btrfs-all"
+#DF_BTRFS_CHECK_ALL=""
 # BTRFS max metadata %
-BTRFS_MAX_METADATADUP_PERCENT=75
+BTRFS_MAX_METADATA_PERCENT=75
 # BTRFS max system %
-BTRFS_MAX_SYSTEMDUP_PERCENT=75
+BTRFS_MAX_SYSTEM_PERCENT=75
 
 [ -n "$DEBUG" ] && DF_MAX_PERCENT=5
-[ -n "$DEBUG" ] && BTRFS_MAX_METADATADUP_PERCENT=5
-[ -n "$DEBUG" ] && BTRFS_MAX_SYSTEMDUP_PERCENT=5
+[ -n "$DEBUG" ] && BTRFS_MAX_METADATA_PERCENT=5
+[ -n "$DEBUG" ] && BTRFS_MAX_SYSTEM_PERCENT=5
 [ -n "$DEBUG" ] && MAILTO="$MAILTO_DEBUG"
 
 PATH="$PATH:/sbin:/usr/sbin"
@@ -70,6 +73,10 @@ check_df ()
 			continue
 		fi
 
+		# skip BTRFS DATA - checked under df
+		if echo "$MOUNT_PT" | grep -q "\/DATA$"; then
+			continue
+		fi
 		# skip if fs on exclusion list
 		if echo "$MOUNT_PT" | grep -q "$SKIP_LIST"; then
 			if [ $DEBUG ]; then echo "$1 on Skip list -ignoring"; fi
@@ -77,7 +84,17 @@ check_df ()
 		fi
 
 		DF_PERCENT=`echo ${USE_PERC} | cut -d "%" -f1`
-		if echo "$DF_EXCEPTION_LIST" | grep -qw "$MOUNT_PT"; then
+		if echo "$MOUNT_PT" | grep -q 'SYSTEM$'; then
+			if [ $DEBUG ]; then 
+				echo "$MOUNT_PT check against $BTRFS_MAX_SYSTEM_PERCENT"; 
+			fi
+			MAX="$BTRFS_MAX_SYSTEM_PERCENT"
+		elif echo "$MOUNT_PT" | grep -q 'METADATA$'; then
+			if [ $DEBUG ]; then 
+				echo "$MOUNT_PT check against $BTRFS_MAX_METADATA_PERCENT"; 
+			fi
+			MAX="$BTRFS_MAX_METADATA_PERCENT"
+		elif echo "$DF_EXCEPTION_LIST" | grep -qw "$MOUNT_PT"; then
 			if [ $DEBUG ]; then  
 				echo "$1 in Exception List" 
 			fi
@@ -102,5 +119,5 @@ check_df ()
 # script starts
 # create list of filesystems, but exclude remote mounts and header, and BTRFS
 # check each filesystem against lists
-${DF} --local | check_df
+${DF} --local ${DF_BTRFS_CHECK_ALL} | check_df
 

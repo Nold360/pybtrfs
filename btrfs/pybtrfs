@@ -533,7 +533,8 @@ def do_df(parse_args):
         Convert input parse_args into df_arg_list
         """
         # working_set['df_arg_list'] = df_arg_list
-        working_set['df_arg_list'] = sys.argv[1:]
+        working_set['df_arg_list'] = [arg for arg in sys.argv[1:] 
+                                        if arg not in ('-A', '--btrfs-all')]
 
         return 0
 
