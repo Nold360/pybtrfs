@@ -304,9 +304,11 @@ def do_qgroup_prune(parse_args):
     try:
         cmd_output = check_output(cmd, stderr=subprocess.STDOUT)
     except subprocess.CalledProcessError as exc:
-        print("%s: btrfs quota not enabled on '%s'" % (progname, parse_args.mount_point),
-                file=sys.stderr)
-        sys.exit(exc.returncode)
+        # Commented out so that command can be used from crontab
+        #print("%s: btrfs quota not enabled on '%s'" % (progname, parse_args.mount_point),
+        #        file=sys.stderr)
+        #sys.exit(exc.returncode)
+        sys.exit(os.EX_OK)
 
 
     cmd = [BTRFS,  "subvolume", "list", parse_args.mount_point]
@@ -314,7 +316,7 @@ def do_qgroup_prune(parse_args):
         args = line.strip().split(' ')
         subvolume_data[int(args[1])] = args[-1]
 
-    for line in icmd_output.splitlines():
+    for line in cmd_output.splitlines():
         args = [x for x in line.strip().split(' ') if len(x)>0]
 
         try:
