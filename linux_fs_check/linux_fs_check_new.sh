@@ -48,6 +48,7 @@ PROGNAME=`basename $0`
 
 if ! [ -x "${DF}" ]; then
 	echo "${PROGNAME}: Can't find '${DF}' or it is not executable." 1>&2
+	exit 2
 fi
 
 alert ()
