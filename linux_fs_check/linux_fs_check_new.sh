@@ -1,4 +1,4 @@
-#!/bin/sh
+#!/bin/bash
 # SCRIPT: linux_fs_check.sh
 # AUTHOR: George R and Mat Grant
 # DATE: 20141014
@@ -42,7 +42,13 @@ BTRFS_MAX_SYSTEM_PERCENT=75
 [ -n "$DEBUG" ] && MAILTO="$MAILTO_DEBUG"
 
 PATH="$PATH:/sbin:/usr/sbin"
-DF="/usr/local/bin/pybtrfs df"
+DF="/usr/local/bin/pybtrfs"
+DF_SUBARG="df"
+PROGNAME=`basename $0`
+
+if ! [ -x "${DF}" ]; then
+	echo "${PROGNAME}: Can't find '${DF}' or it is not executable." 1>&2
+fi
 
 alert ()
 # send mail with detail
@@ -119,5 +125,5 @@ check_df ()
 # script starts
 # create list of filesystems, but exclude remote mounts and header, and BTRFS
 # check each filesystem against lists
-${DF} --local ${DF_BTRFS_CHECK_ALL} | check_df
+${DF} ${DF_SUBARG} --local ${DF_BTRFS_CHECK_ALL} | check_df
 
