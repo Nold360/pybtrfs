@@ -538,6 +538,19 @@ def do_df(parse_args):
 
         return 0
 
+    def list_subvols(parse_args, working_set):
+
+        subvol_mounts = []
+        fstab = open('/etc/fstab', 'r')
+        for line in fstab:
+            if (line.find('btrfs') == -1 or line.find('subvol') == -1):
+                continue
+            fstab_line = line.split()
+            subvol_mounts.append(fstab_line[1])
+        fstab.close()
+        working_set['subvol_mounts'] = subvol_mounts
+
+
     def run_df(parse_args, working_set):
         """
         Run df with -T, capture out put
@@ -562,7 +575,10 @@ def do_df(parse_args):
         df_output_dict['df_header']['Size'] = df_header_sizeword
         df_output_dict['df_header']['Available'] = df_header_availableword
         for fs in df_output[1:]:
-            df_output_dict[fs[0]] = dict(zip(df_output[0], fs))
+            entry = dict(zip(df_output[0], fs))
+            if (entry['Mounted on'] in working_set['subvol_mounts']):
+                continue
+            df_output_dict[fs[0]] = entry
         working_set['df_output_dict'] = df_output_dict
 
         return 0
@@ -571,10 +587,14 @@ def do_df(parse_args):
         """
         Get btrfs mount points
         """
+        # read in /etc/fstab so that we can deal with subvol mounts
+        subvol_mount = []
         btrfs_list = []
         for k in working_set["df_output_dict"]:
             fs = working_set["df_output_dict"][k]
             if fs['Type'] != 'btrfs':
+                continue
+            if (fs['Mounted on'] in working_set['subvol_mounts']):
                 continue
             # find real file system device
             fs['real_dev'] = os.path.realpath(fs['Filesystem'])
@@ -903,6 +923,8 @@ def do_df(parse_args):
 
 
     working_set = dict()
+
+    list_subvols(parse_args, working_set)
 
     convert_args(parse_args, working_set)
 
