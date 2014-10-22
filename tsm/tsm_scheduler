@@ -1,0 +1,78 @@
+#!/bin/bash
+# SCRIPT: tsm_scheduler.sh
+# AUTHOR George R
+# DATE: 170513
+# FUNCTION: Manage TSM scheduler
+# NOTE: must use bash as shell else functions dont work as expected
+
+check ()
+# check status of scheduler return 0 if found else return 1
+{
+ps -ef | grep dsmc | grep -v grep > /dev/null
+if [ $? -eq 0 ]
+then
+  return 0
+else
+  return 1
+fi
+}
+
+start ()
+#
+{
+echo ""
+nohup /usr/bin/dsmc sched &
+}
+
+stop ()
+#
+{
+PID=`ps -ef | grep "/usr/bin/dsmc" | grep -v grep | tr -s " " " " | cut -d " " -f2`
+# double check
+ps -p $PID -o comm | tail -n1 | grep "dsmc" > /dev/null
+if [ $? -ne 0 ]
+then
+  echo "NOT stopping $PID - may not be correct process"
+else
+  echo "Stopping $PID"
+  kill $PID
+fi
+}
+
+restart ()
+#
+{
+stop
+sleep 5
+start
+}
+
+status ()
+#
+{
+ps -ef | grep dsmc | grep -v grep > /dev/null
+if [ $? -eq 0 ]
+then
+  echo "Scheduler appears to be running"
+else
+  echo "Scheduler appears NOT to be running"
+fi
+}
+
+usage ()
+#
+{
+echo "$0 [start|stop|restart|status]"
+echo ""
+echo "This scripts manages the TSM scheduler for this Server"
+}
+
+# script starts
+case $1 in
+"start") start;;
+"stop") stop;;
+"restart") restart;;
+"status") status;;
+*) usage ;;
+esac
+
