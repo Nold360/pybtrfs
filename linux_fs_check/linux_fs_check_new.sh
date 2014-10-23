@@ -17,6 +17,7 @@
 MAILTO="itbasissupport@foodstuffs-si.co.nz"
 MAILTO_DEBUG="matt.grant@foodstuffs-si.co.nz"
 DEBUG=""       # set to any value to turn debug on
+IGNORE_BLOCK="" # set if you want to ignore /BLOCK output
 TIME=`date`
 HOSTNAME=`hostname`
 
@@ -82,6 +83,10 @@ check_df ()
 
 		# skip BTRFS DATA - checked under df
 		if echo "$MOUNT_PT" | grep -q "\/DATA$"; then
+			continue
+		fi
+		# skip BTRFS DATA - checked under df
+		if [ -n "$IGNORE_BLOCK" ] && echo "$MOUNT_PT" | grep -q "\/BLOCK$"; then
 			continue
 		fi
 		# skip if fs on exclusion list
