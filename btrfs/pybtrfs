@@ -578,7 +578,7 @@ def do_df(parse_args):
             entry = dict(zip(df_output[0], fs))
             if (entry['Mounted on'] in working_set['subvol_mounts']):
                 continue
-            df_output_dict[fs[0]] = entry
+            df_output_dict[fs[6]] = entry
         working_set['df_output_dict'] = df_output_dict
 
         return 0
@@ -627,7 +627,6 @@ def do_df(parse_args):
 
         5) Put into df output
         """
-
         if (not parse_args.btrfs_all):
             return os.EX_OK
 
@@ -722,7 +721,7 @@ def do_df(parse_args):
                         'Mounted on': out_mounted_on,
                         'Type': fs['Type']
                         }
-                df_output_dict[out_dict['Filesystem']] = out_dict
+                df_output_dict[out_dict['Mounted on']] = out_dict
 
     def do_btrfs_qgroup_show(parse_args, working_set):
         """
@@ -802,7 +801,7 @@ def do_df(parse_args):
 
             df_output_dict = working_set['df_output_dict']
             for line in output:
-                df_output_dict[line['Filesystem']] = line
+                df_output_dict[line['Mounted on']] = line
 
     def do_btrfs_filesystem_show(parse_args, working_set):
         """
@@ -856,7 +855,7 @@ def do_df(parse_args):
             # Insert into output dict
             df_output_dict = working_set['df_output_dict']
             for device in output:
-                df_output_dict[line['Filesystem']] = line
+                df_output_dict[line['Mounted on']] = line
 
     def display_output(parse_args, working_set):
         """
@@ -873,6 +872,12 @@ def do_df(parse_args):
 
         df_header = working_set['df_output_dict']['df_header']
 
+        dev_output_dict = {}
+        for m in working_set['df_output_dict'].keys():
+            if (m == 'df_header'):
+                continue
+            fs = working_set["df_output_dict"][m]
+            dev_output_dict[fs['Filesystem']] = fs
 
         if (not '-T' in df_arg_list and not '--print-type' in df_arg_list):
             print('%s %s %s %s %s %s' 
@@ -883,10 +888,8 @@ def do_df(parse_args):
                     df_header['Use%'].rjust(max_len['Use%']),
                     df_header['Mounted on'].rjust(max_len['Mounted on'])
                     ), file=sys.stdout)
-            for k in sorted(working_set["df_output_dict"].keys()):
-                if (k == 'df_header'):
-                    continue
-                fs = working_set["df_output_dict"][k]
+            for k in sorted(dev_output_dict.keys()):
+                fs = dev_output_dict[k]
                 print('%s %s %s %s %s %s' 
                     % ( fs['Filesystem'].ljust(max(max_len['Filesystem'], 14)),
                         fs['Size'].rjust(max_len['Size']),
@@ -905,10 +908,8 @@ def do_df(parse_args):
                     df_header['Use%'].rjust(max_len['Use%']),
                     df_header['Mounted on'].rjust(max_len['Mounted on'])
                     ), file=sys.stdout)
-            for k in sorted(working_set["df_output_dict"].keys()):
-                if (k == 'df_header'):
-                    continue
-                fs = working_set["df_output_dict"][k]
+            for k in sorted(dev_output_dict.keys()):
+                fs = dev_output_dict[k]
                 print('%s %s %s %s %s %s %s'
                     % ( fs['Filesystem'].ljust(max(max_len['Filesystem'], 14)),
                         fs['Type'].ljust(max_len['Type']),
