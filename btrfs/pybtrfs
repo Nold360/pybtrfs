@@ -720,7 +720,8 @@ def do_df(parse_args):
             
             output2.append(system)
             output2.append(metadata)
-            output2.append(data)
+            if len(data):
+                output2.append(data)
             output = output2
 
             # Scale bytes -> output
