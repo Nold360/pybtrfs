@@ -558,11 +558,20 @@ def do_df(parse_args):
         btrfs_mounts = [m for m in btrfs_mounts if m not in subvol_mounts]
         working_set['subvol_mounts'] = subvol_mounts
         working_set['btrfs_mounts'] = btrfs_mounts
+        btrfs_devs = {}
+        mounts = open('/proc/mounts', 'r')
+        for line in mounts:
+            if (line.find('btrfs') == -1):
+                continue
+            mount_line = line.split()
+            btrfs_devs[mount_line[1]] = mount_line[0]
+        working_set['btrfs_devs'] = btrfs_devs
+            
 
 
     def run_df(parse_args, working_set):
         """
-        Run df with -T, capture out put
+        Run df with -T, capture output
         """
         # Work out args to give to df
         cmd = [DF, '-T']
@@ -576,22 +585,27 @@ def do_df(parse_args):
         df_header = size_re.sub(r'\1Size\3', df_header)
         df_header_availableword = available_re.sub(r'\2', df_header)
         df_header = available_re.sub(r'\1Available\3', df_header)
-        df_output = [x for x in df_output if x[0] == '/']
+        df_output = [x for x in df_output if (x[0] in ('/',) or x[:2] == '- ')]
         df_output.insert(0, df_header)
         df_output = [x.split(None, 6) for x in df_output]
-        
         df_output_dict = {'df_header': dict(zip(df_output[0], df_output[0]))}
         df_output_dict['df_header']['Size'] = df_header_sizeword
         df_output_dict['df_header']['Available'] = df_header_availableword
         for fs in df_output[1:]:
             entry = dict(zip(df_output[0], fs))
-            mpt = entry['Mounted on']
-            mpts = [ m for m in working_set['df_fs_list'] if m.find(mpt) != -1 ]
-            if (len(mpts)):
-                pass
-            elif (entry['Mounted on'] in working_set['subvol_mounts']):
+            if (entry['Type'] != 'btrfs' and entry['Filesystem'] != '-'):
+                df_output_dict[entry['Mounted on']] = entry
                 continue
-            df_output_dict[fs[6]] = entry
+            
+            # Working with BTRFS FS output
+            mpt = entry['Mounted on']
+            mpts = [ m for m in working_set['btrfs_mounts'] if mpt.find(m) != -1 ]
+            if (len(mpts)):
+                entry['Mounted on'] = max(mpts, key=len)
+                entry['Filesystem'] = working_set['btrfs_devs'][entry['Mounted on']] 
+                entry['Type'] = 'btrfs'
+                df_output_dict[entry['Mounted on']] = entry
+                continue
         working_set['df_output_dict'] = df_output_dict
 
         return 0
@@ -607,14 +621,12 @@ def do_df(parse_args):
             fs = working_set["df_output_dict"][k]
             if fs['Type'] != 'btrfs':
                 continue
-            if (fs['Mounted on'] in working_set['df_fs_list']):
-                # Match to most specific BTRFS mount pount
-                mpt = fs['Mounted on']
-                mpts = [ m for m in working_set['btrfs_mounts'] if mpt.find(m) != -1 ]
+            # Match to most specific BTRFS mount pount
+            mpt = fs['Mounted on']
+            mpts = [ m for m in working_set['btrfs_mounts'] if mpt.find(m) != -1 ]
+            if (len(mpts)):
                 real_mpt = max(mpts, key=len)
                 fs['Mounted on'] = real_mpt
-            elif (fs['Mounted on'] in working_set['subvol_mounts']):
-                continue
             # find real file system device
             fs['real_dev'] = os.path.realpath(fs['Filesystem'])
             btrfs_list.append(fs)
