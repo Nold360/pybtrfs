@@ -8,7 +8,7 @@ PROGNAME="`basename $0`"
 PGVERSION="9.1"
 DBDUMPDIR="/var/backups"
 # Settings that depend on settings file
-PGETCDIR="/var/lig/pgsql/data"
+PGETCDIR="/var/lib/pgsql/data"
 DBDUMPFILE="postgresql-${PGVERSION}-rhn.sql.gz"
 
 PATH="/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin"
@@ -71,8 +71,9 @@ dumpdb () {
 
         local PORT=`get_pgport`
         if [ -z "$PORT" ]; then
-                echo "$PROGNAME: can't obtain port number - database configuration?" 1>&2
-               exit 2
+               # echo "$PROGNAME: can't obtain port number - database configuration?" 1>&2
+               #exit 2
+		PORT=5432
         fi
         # Save anyone from just reading the dump files...
         umask 077
