@@ -6,10 +6,11 @@ set -e
 
 PROGNAME="`basename $0`"
 PGVERSION="9.1"
+PGDB="susemanager"
 DBDUMPDIR="/var/backups"
 # Settings that depend on settings file
 PGETCDIR="/var/lib/pgsql/data"
-DBDUMPFILE="postgresql-${PGVERSION}-rhn.sql.gz"
+DBDUMPFILE="postgresql-${PGVERSION}-${PGDB}.sql.gz"
 
 PATH="/sbin:/bin:/usr/sbin:/usr/bin:/usr/local/sbin:/usr/local/bin"
 
