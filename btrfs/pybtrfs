@@ -566,8 +566,20 @@ def do_df(parse_args):
             mount_line = line.split()
             btrfs_devs[mount_line[1]] = mount_line[0]
         working_set['btrfs_devs'] = btrfs_devs
-            
-
+        mounts.close()
+        cmd = ['/sbin/blkid']
+        blkid_output = cmd_stdout(cmd)
+        blkid_output = blkid_output.splitlines()
+        blkid_output = [line.split() for line in blkid_output]
+        blkids = {}
+        for line in blkid_output:
+            dev = line[0][:-1]
+            blkid = {}
+            blkids[dev] = blkid
+            for b in line[1:]:
+                thing = b.split('=')
+                blkid[thing[0]] = thing[1][1:-1]
+        working_set['blkid'] = blkids
 
     def run_df(parse_args, working_set):
         """
@@ -604,6 +616,8 @@ def do_df(parse_args):
                 entry['Mounted on'] = max(mpts, key=len)
                 entry['Filesystem'] = working_set['btrfs_devs'][entry['Mounted on']] 
                 entry['Type'] = 'btrfs'
+                entry['UUID'] = working_set['blkid'].get(entry['Filesystem']).get('UUID')
+                entry['blkid'] = working_set['blkid'].get(entry['Filesystem'])
                 df_output_dict[entry['Mounted on']] = entry
                 continue
         working_set['df_output_dict'] = df_output_dict
@@ -905,7 +919,7 @@ def do_df(parse_args):
         for k in working_set["df_output_dict"]:
             fs = working_set["df_output_dict"][k]
             max_len = dict([(k2, max(max_len[k2], len(fs[k2]))) for k2 in fs 
-                                                    if k2 != 'real_dev'])
+                                            if (k2 not in ('real_dev', 'UUID', 'blkid'))])
 
         df_header = working_set['df_output_dict']['df_header']
 
