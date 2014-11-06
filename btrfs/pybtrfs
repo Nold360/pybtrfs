@@ -201,6 +201,10 @@ def do_qgroup_show(parse_args):
     for line in cmd_output.splitlines():
         args = [x for x in line.strip().split(' ') if len(x)>0]
 
+        if args[0] in ('qgroupid', '--------'):
+             # Skip column headers
+             continue
+
         try:
             subvolume_id = args[0].split('/')[-1]
             subvolume_name = subvolume_data[int(subvolume_id)]
