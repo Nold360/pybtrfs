@@ -26,6 +26,8 @@ PERC_FORMAT="%01.0f"
 LIMIT_DBM_FILE = '/var/lib/misc/pybtrfs_qgroup_limit.dbm'
 BTRFS = '/sbin/btrfs'
 DF = '/bin/df'
+BTRFS_QGROUP_VER = '0.20'
+BTRFS_QGROUP_LIMIT_DISPLAY_VER = '3.16'
 progname = os.path.basename(sys.argv[0])
 db = None    
 
@@ -65,6 +67,27 @@ except ImportError:
                 cmd = popenargs[0]
             raise subprocess.CalledProcessError(retcode, cmd)
         return output
+
+def get_btrfs_tools_version():
+    """
+    Get BTRFS versioning
+    """
+    cmd = [BTRFS, '--version']
+    cmd_output = cmd_stdout(cmd, exit_on_error=False, suppress_stderr=True)
+    cmd_output = cmd_output.splitlines()
+    version_line = [ line for line in cmd_output if line[:5] == 'Btrfs']
+    if (len(version_line) != 1):
+        print("%s: Can't determine btrfs progs version." % progname, file=sys.stderr)
+        sys.exit(os.EX_SOFTWARE)
+    try:
+        version = version_line[0].split()[1]
+        ver_re = re.compile(r'^v([0-9\.]+)\S+$')
+        version = ver_re.sub(r'\1', version)
+        version = float(version)
+    except:
+        print("%s: Can't determine btrfs progs version." % progname, file=sys.stderr)
+        sys.exit(os.EX_SOFTWARE)
+    return version
 
 def parse_qgroup_show_args():
     parser = argparse.ArgumentParser(prog=progname+' qgroup show',
@@ -130,14 +153,14 @@ def get_limit(path_key):
         limit = None
     return limit
 
-def cmd_stdout(cmd):
+def cmd_stdout(cmd, exit_on_error=True, suppress_stderr=False):
     try:
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE,
-                            stderr=None,
+                            stderr=subprocess.PIPE,
                             bufsize=1, close_fds=True, )
         (cmd_output, cmd_stderr) = process.communicate()
         retcode = process.poll()
-        if retcode:
+        if (exit_on_error and retcode != 0):
             if cmd_stderr:
                 print(cmd_stderr, file=sys.stderr)
             sys.exit(retcode)
@@ -150,7 +173,7 @@ def cmd_stdout(cmd):
             sys.exit(os.EX_NOPERM)
         else:
             sys.exit(os.EX_OSERR)
-    if cmd_stderr:
+    if (not(suppress_stderr) and cmd_stderr):
         print(cmd_stderr, file=sys.stderr)
 
     return cmd_output
@@ -777,9 +800,7 @@ def do_df(parse_args):
         """
 
         # See if btrfs has 'qgroup' support
-        cmd = [BTRFS, 'help']
-        btrfs_output = cmd_stdout(cmd)
-        if (btrfs_output.find('qgroup') == -1):
+        if (btrfs_tools_version < BTRFS_QGROUP_VER):
             return 0
 
         for fs in working_set['btrfs_list']:
@@ -1008,6 +1029,8 @@ if (os.geteuid() != 0):
     print("%s: You need to be at least suid root to run this program." % progname,
             file=sys.stderr)
     sys.exit(os.EX_NOPERM)
+
+btrfs_tools_version = get_btrfs_tools_version()
 
 argc = len(sys.argv)
 argv = sys.argv
