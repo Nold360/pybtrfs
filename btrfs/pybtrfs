@@ -89,12 +89,12 @@ def get_btrfs_tools_version():
         sys.exit(os.EX_SOFTWARE)
     return version
 
-def parse_qgroup_show_args():
-    parser = argparse.ArgumentParser(prog=progname+' qgroup show',
-        description='Gives quotas from a BTRFS filesystem in a readable form'
+def parse_quota_display_args():
+    parser = argparse.ArgumentParser(prog=progname+' quota display',
+        description='Displays quota groups from a BTRFS filesystem readably'
     )
     parser.add_argument(
-        '--unit', metavar='U', type=str,
+        '-u', '--unit', metavar='U', type=str,
         default='G',
         help='SI Unit, [B]ytes, K, M, G, T, P',
     )
@@ -179,7 +179,7 @@ def cmd_stdout(cmd, exit_on_error=True, suppress_stderr=False):
     return cmd_output
         
 
-def do_qgroup_show(parse_args):
+def do_quota_display(parse_args):
 
     subvolume_data = dict()
     cmd = [BTRFS,  "subvolume", "list", parse_args.mount_point]
@@ -806,7 +806,7 @@ def do_df(parse_args):
                         }
                 df_output_dict[out_dict['Mounted on']] = out_dict
 
-    def do_btrfs_qgroup_show(parse_args, working_set):
+    def do_btrfs_quota_display(parse_args, working_set):
         """
         6) For each btfrs FS run btrfs qgroup show
         7) Analyse btrfs qgroup show output
@@ -1038,7 +1038,7 @@ def do_df(parse_args):
     # 6) For each btfrs FS run btrfs qgroup show
     # 7) Analyse btrfs qgroup show output
     # 8) Insert output into congolmerated output
-    exit_code = do_btrfs_qgroup_show(parse_args, working_set)
+    exit_code = do_btrfs_quota_display(parse_args, working_set)
 
     # Do btrfs file system show
     exit_code = do_btrfs_filesystem_show(parse_args, working_set)
@@ -1063,9 +1063,9 @@ if (argc >= 3 and  argv[1] == 'qgroup' and argv[2] == 'limit'):
 	sys.exit(exit_code)
     parse_args = parse_qgroup_limit_args()
     exit_code = do_qgroup_limit(parse_args)
-elif (argc >= 3 and argv[1] =='qgroup' and argv[2] == 'show'):
-    parse_args = parse_qgroup_show_args()
-    exit_code = do_qgroup_show(parse_args)
+elif (argc >= 3 and argv[1] =='qgroup' and argv[2] == 'display'):
+    parse_args = parse_quota_display_args()
+    exit_code = do_quota_display(parse_args)
 elif (argc >= 3 and argv[1] =='qgroup' and argv[2] == 'prune'):
     parse_args = parse_qgroup_prune_args()
     exit_code = do_qgroup_prune(parse_args)
