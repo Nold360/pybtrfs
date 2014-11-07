@@ -188,7 +188,11 @@ def do_qgroup_show(parse_args):
         subvolume_data[int(args[1])] = args[-1]
 
     
-    cmd = [BTRFS, "qgroup", "show", parse_args.mount_point]
+    cmd = [BTRFS, "qgroup", "show"]
+    if (btrfs_tools_version >= BTRFS_QGROUP_LIMIT_DISPLAY_VER):
+       cmd.append('-r')
+    cmd.append(parse_args.mount_point)
+
     try:
         cmd_output =  check_output(cmd, stderr=subprocess.STDOUT)
     except subprocess.CalledProcessError as exc:
@@ -213,7 +217,13 @@ def do_qgroup_show(parse_args):
 
         # Get limit out of DBM file
         subvol = subvolume_data.get(int(subvolume_id))
-        limit = get_limit(subvol)
+        if (btrfs_tools_version >= BTRFS_QGROUP_LIMIT_DISPLAY_VER):
+            try:
+                limit = float(args[3])
+            except (TypeError, ValueError):
+                limit = None
+        else:
+            limit = get_limit(subvol)
         if (limit is None):
             limit = '--'
             limit_unit = '-'
@@ -810,7 +820,10 @@ def do_df(parse_args):
         for fs in working_set['btrfs_list']:
             
             try:
-                cmd = [BTRFS, 'qgroup', 'show', fs['Mounted on']]
+                cmd = [BTRFS, "qgroup", "show"]
+                if (btrfs_tools_version >= BTRFS_QGROUP_LIMIT_DISPLAY_VER):
+                    cmd.append('-r')
+                cmd.append(fs["Mounted on"])
                 cmd_output = check_output(cmd, stderr=subprocess.STDOUT )
             except subprocess.CalledProcessError as exc:
                 continue
@@ -822,7 +835,6 @@ def do_df(parse_args):
                 args = line.strip().split(' ')
                 subvolume_data[int(args[1])] = args[-1]
 
-            cmd = [BTRFS, "qgroup", "show", fs['Mounted on']]
             for line in cmd_output.splitlines():
                 args = [x for x in line.strip().split(' ') if len(x)>0]
 
@@ -836,8 +848,15 @@ def do_df(parse_args):
 
                 # Get limit out of DBM file
                 subvol = subvolume_data.get(int(subvolume_id))
-                limit = get_limit(subvol)
-                if (limit is None):
+
+                if (btrfs_tools_version >= BTRFS_QGROUP_LIMIT_DISPLAY_VER):
+                    try:
+                        limit = float(args[3])
+                    except (TypeError, ValueError):
+                        limit = None
+                else:
+                    limit = get_limit(subvol)
+                if (limit is None or limit <= 0):
                     continue
 
                 total = int(args[1])
