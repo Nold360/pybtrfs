@@ -26,8 +26,8 @@ PERC_FORMAT="%01.0f"
 LIMIT_DBM_FILE = '/var/lib/misc/pybtrfs_qgroup_limit.dbm'
 BTRFS = '/sbin/btrfs'
 DF = '/bin/df'
-BTRFS_QGROUP_VER = '0.20'
-BTRFS_QGROUP_LIMIT_DISPLAY_VER = '3.16'
+BTRFS_QGROUP_VER = float('0.20')
+BTRFS_QGROUP_LIMIT_DISPLAY_VER = float('3.12')
 progname = os.path.basename(sys.argv[0])
 db = None    
 
@@ -1039,6 +1039,9 @@ btrfs_tools_version = get_btrfs_tools_version()
 argc = len(sys.argv)
 argv = sys.argv
 if (argc >= 3 and  argv[1] == 'qgroup' and argv[2] == 'limit'):
+    if (btrfs_tools_version >= BTRFS_QGROUP_LIMIT_DISPLAY_VER):
+        exit_code = os.execvpe(BTRFS, argv, os.environ)
+	sys.exit(exit_code)
     parse_args = parse_qgroup_limit_args()
     exit_code = do_qgroup_limit(parse_args)
 elif (argc >= 3 and argv[1] =='qgroup' and argv[2] == 'show'):
