@@ -989,12 +989,12 @@ def do_df(parse_args):
 
         df_header = working_set['df_output_dict']['df_header']
 
-        dev_output_dict = {}
+        mnt_output_dict = {}
         for m in working_set['df_output_dict'].keys():
             if (m == 'df_header'):
                 continue
             fs = working_set["df_output_dict"][m]
-            dev_output_dict[fs['Filesystem']] = fs
+            mnt_output_dict[fs['Mounted on']] = fs
 
         if (not '-T' in df_arg_list and not '--print-type' in df_arg_list):
             print('%s %s %s %s %s %s' 
@@ -1005,8 +1005,8 @@ def do_df(parse_args):
                     df_header['Use%'].rjust(max_len['Use%']),
                     df_header['Mounted on'].rjust(max_len['Mounted on'])
                     ), file=sys.stdout)
-            for k in sorted(dev_output_dict.keys()):
-                fs = dev_output_dict[k]
+            for k in sorted(mnt_output_dict.keys()):
+                fs = mnt_output_dict[k]
                 print('%s %s %s %s %s %s' 
                     % ( fs['Filesystem'].ljust(max(max_len['Filesystem'], 14)),
                         fs['Size'].rjust(max_len['Size']),
@@ -1025,8 +1025,8 @@ def do_df(parse_args):
                     df_header['Use%'].rjust(max_len['Use%']),
                     df_header['Mounted on'].rjust(max_len['Mounted on'])
                     ), file=sys.stdout)
-            for k in sorted(dev_output_dict.keys()):
-                fs = dev_output_dict[k]
+            for k in sorted(mnt_output_dict.keys()):
+                fs = mnt_output_dict[k]
                 print('%s %s %s %s %s %s %s'
                     % ( fs['Filesystem'].ljust(max(max_len['Filesystem'], 14)),
                         fs['Type'].ljust(max_len['Type']),
