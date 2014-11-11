@@ -578,45 +578,67 @@ def do_df(parse_args):
 
         return 0
 
-    def list_subvols(parse_args, working_set):
+    def scan_btrfs(parse_args, working_set):
 
-        subvol_mounts = []
-        btrfs_mounts = []
-        fstab = open('/etc/fstab', 'r')
-        for line in fstab:
-            if (line.find('btrfs') == -1):
-                continue
-            fstab_line = line.split()
-            btrfs_mounts.append(fstab_line[1])
-            if (line.find('subvol') == -1):
-                continue
-            subvol_mounts.append(fstab_line[1])
-        fstab.close()
-        btrfs_mounts = [m for m in btrfs_mounts if m not in subvol_mounts]
-        working_set['subvol_mounts'] = subvol_mounts
-        working_set['btrfs_mounts'] = btrfs_mounts
-        btrfs_devs = {}
+        cmd = ['/sbin/blkid']
+        blkid_output = cmd_stdout(cmd)
+        blkid_output = blkid_output.splitlines()
+        blkids = {}
+        for line in blkid_output:
+            dev, rest = line.split(':',1)
+            blkid = {}
+            blkids[dev] = blkid
+            rest = rest.strip()
+            rest = rest.split('" ')
+            for b in rest:
+                thing = b.split('=')
+                if thing[1][-1] == '"':
+                    blkid[thing[0].lower()] = thing[1][1:-1]
+                else:
+                    blkid[thing[0].lower()] = thing[1][1:]
+        working_set['blkid'] = blkids
+
+        btrfs_blkid_devs = [d for d in blkids.keys() 
+                                if blkids[d]['type'] == 'btrfs']
+        working_set['btrfs_blkid_devs'] = btrfs_blkid_devs
+
+        btrfs_mnt_devs = {}
         mounts = open('/proc/mounts', 'r')
         for line in mounts:
             if (line.find('btrfs') == -1):
                 continue
             mount_line = line.split()
-            btrfs_devs[mount_line[1]] = mount_line[0]
-        working_set['btrfs_devs'] = btrfs_devs
+            btrfs_mnt_devs[mount_line[1]] = mount_line[0]
+        working_set['btrfs_mnt_devs'] = btrfs_mnt_devs
         mounts.close()
-        cmd = ['/sbin/blkid']
-        blkid_output = cmd_stdout(cmd)
-        blkid_output = blkid_output.splitlines()
-        blkid_output = [line.split() for line in blkid_output]
-        blkids = {}
-        for line in blkid_output:
-            dev = line[0][:-1]
-            blkid = {}
-            blkids[dev] = blkid
-            for b in line[1:]:
-                thing = b.split('=')
-                blkid[thing[0]] = thing[1][1:-1]
-        working_set['blkid'] = blkids
+
+        subvol_mounts = []
+        btrfs_mounts = []
+        first = True
+        for dev in btrfs_blkid_devs:
+            fstab = open('/etc/fstab', 'r')
+            for line in fstab:
+                if (line.find('btrfs') == -1):
+                    continue
+                fstab_line = line.split()
+                line_dev = btrfs_mnt_devs.get(fstab_line[1])
+                if (not line_dev):
+                    continue
+                if (line_dev != dev):
+                    continue
+                if first:
+                    first = False
+                    btrfs_mounts.append(fstab_line[1])
+                    continue
+                subvol_mounts.append(fstab_line[1])
+            fstab.close()
+            first = True
+       
+        def fn_sort(x,y): return(cmp(len(x), len(y)));
+        btrfs_mounts.sort(fn_sort)
+
+        working_set['subvol_mounts'] = subvol_mounts
+        working_set['btrfs_mounts'] = btrfs_mounts
 
     def run_df(parse_args, working_set):
         """
@@ -651,7 +673,7 @@ def do_df(parse_args):
             mpts = [ m for m in working_set['btrfs_mounts'] if mpt.find(m) != -1 ]
             if (len(mpts)):
                 entry['Mounted on'] = max(mpts, key=len)
-                entry['Filesystem'] = working_set['btrfs_devs'][entry['Mounted on']] 
+                entry['Filesystem'] = working_set['btrfs_mnt_devs'][entry['Mounted on']] 
                 entry['Type'] = 'btrfs'
                 entry['UUID'] = working_set['blkid'].get(entry['Filesystem']).get('UUID')
                 entry['blkid'] = working_set['blkid'].get(entry['Filesystem'])
@@ -1020,9 +1042,10 @@ def do_df(parse_args):
 
     working_set = dict()
 
-    list_subvols(parse_args, working_set)
+    scan_btrfs(parse_args, working_set)
 
     convert_args(parse_args, working_set)
+
 
     # 1) Run df with -T, capture out put
     exit_code = run_df(parse_args, working_set)
