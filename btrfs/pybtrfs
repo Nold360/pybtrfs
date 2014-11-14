@@ -81,7 +81,7 @@ def get_btrfs_tools_version():
         sys.exit(os.EX_SOFTWARE)
     try:
         version = version_line[0].split()[1]
-        ver_re = re.compile(r'^v([0-9\.]+)\S+$')
+        ver_re = re.compile(r'^v([0-9\.]+)\S*$')
         version = ver_re.sub(r'\1', version)
         version = float(version)
     except:
@@ -597,23 +597,28 @@ def do_df(parse_args):
                 else:
                     blkid[thing[0].lower()] = thing[1][1:]
         working_set['blkid'] = blkids
-
+        
         btrfs_blkid_devs = [d for d in blkids.keys() 
-                                if blkids[d]['type'] == 'btrfs']
+                                if blkids[d].get('type') == 'btrfs']
         working_set['btrfs_blkid_devs'] = btrfs_blkid_devs
 
         btrfs_mnt_devs = {}
         mounts = open('/proc/mounts', 'r')
         for line in mounts:
-            if (line.find('btrfs') == -1):
-                continue
             mount_line = line.split()
+            if (mount_line[1] == '/' and mount_line[0] != 'rootfs'):
+                root_dev = mount_line[0]
+            if (mount_line[2] != 'btrfs'):
+                continue
             btrfs_mnt_devs[mount_line[1]] = mount_line[0]
         working_set['btrfs_mnt_devs'] = btrfs_mnt_devs
+        working_set['root_dev'] = root_dev
         mounts.close()
 
-        subvol_mounts = []
         btrfs_mounts = []
+        btrfs_allvols = {}
+        # Scan to see if btrfs roots are mounted
+        # Scan
         first = True
         for dev in btrfs_blkid_devs:
             fstab = open('/etc/fstab', 'r')
@@ -628,17 +633,26 @@ def do_df(parse_args):
                     continue
                 if first:
                     first = False
+                    btrfs_allvols[dev] = [fstab_line[1]]
                     btrfs_mounts.append(fstab_line[1])
                     continue
-                subvol_mounts.append(fstab_line[1])
+                if (fstab_line[3].find('subvolid=0') != -1
+                        or fstab_line[3].find('subvol=/')):
+                    if (btrfs_mnt_devs[fstab_line[1]] != root_dev):
+                        btrfs_allvols[dev].insert(0, fstab_line[1])
+                        btrfs_mounts.append(fstab_line[1])
+                        continue
+                btrfs_allvols[dev].append(fstab_line[1])
+                if (btrfs_mnt_devs[fstab_line[1]] != root_dev):
+                    btrfs_mounts.append(fstab_line[1])
             fstab.close()
             first = True
        
         def fn_sort(x,y): return(cmp(len(x), len(y)));
         btrfs_mounts.sort(fn_sort)
 
-        working_set['subvol_mounts'] = subvol_mounts
         working_set['btrfs_mounts'] = btrfs_mounts
+        working_set['btrfs_allvols'] = btrfs_allvols
 
     def run_df(parse_args, working_set):
         """
@@ -662,9 +676,11 @@ def do_df(parse_args):
         df_output_dict = {'df_header': dict(zip(df_output[0], df_output[0]))}
         df_output_dict['df_header']['Size'] = df_header_sizeword
         df_output_dict['df_header']['Available'] = df_header_availableword
+        df_output_order = []
         for fs in df_output[1:]:
             entry = dict(zip(df_output[0], fs))
             if (entry['Type'] != 'btrfs' and entry['Filesystem'] != '-'):
+                df_output_order.append(entry['Mounted on'])
                 df_output_dict[entry['Mounted on']] = entry
                 continue
             
@@ -677,9 +693,13 @@ def do_df(parse_args):
                 entry['Type'] = 'btrfs'
                 entry['UUID'] = working_set['blkid'].get(entry['Filesystem']).get('UUID')
                 entry['blkid'] = working_set['blkid'].get(entry['Filesystem'])
+                
+                if entry['Mounted on'] not in df_output_order:
+                    df_output_order.append(entry['Mounted on'])
                 df_output_dict[entry['Mounted on']] = entry
                 continue
         working_set['df_output_dict'] = df_output_dict
+        working_set['df_output_order'] = df_output_order
 
         return 0
 
@@ -688,7 +708,6 @@ def do_df(parse_args):
         Get btrfs mount points
         """
         # read in /etc/fstab so that we can deal with subvol mounts
-        subvol_mount = []
         btrfs_list = []
         for k in working_set["df_output_dict"]:
             fs = working_set["df_output_dict"][k]
@@ -702,6 +721,7 @@ def do_df(parse_args):
                 fs['Mounted on'] = real_mpt
             # find real file system device
             fs['real_dev'] = os.path.realpath(fs['Filesystem'])
+            fs['mnt_dev'] = fs['Filesystem']
             btrfs_list.append(fs)
 
         working_set['btrfs_list'] = btrfs_list
@@ -735,6 +755,13 @@ def do_df(parse_args):
             return os.EX_OK
 
         for fs in working_set['btrfs_list']:
+            # Skip if not 'lead' volume in a btrfs FS
+            fs_dev = working_set['btrfs_mnt_devs'].get(fs['Mounted on'])
+            if not fs_dev:
+                continue
+            if working_set['btrfs_allvols'][fs_dev][0] != fs['Mounted on']:
+                continue
+
             # For each btrfs FS run btrfs filesystem df
             cmd = [BTRFS, 'filesystem', 'df', fs['Mounted on']]
             btrfs_output = cmd_stdout(cmd)
@@ -824,7 +851,8 @@ def do_df(parse_args):
                         'Filesystem': fs['Filesystem'] + '/' + line['tag'].upper(),
                         'Available': line['available'],
                         'Mounted on': out_mounted_on,
-                        'Type': fs['Type']
+                        'Type': fs['Type'],
+                        'mnt_dev': fs['Filesystem'],
                         }
                 df_output_dict[out_dict['Mounted on']] = out_dict
 
@@ -834,7 +862,7 @@ def do_df(parse_args):
         7) Analyse btrfs qgroup show output
         8) Insert output into congolmerated output
         """
-
+        import pdb; pdb.set_trace()
         # See if btrfs has 'qgroup' support
         if (btrfs_tools_version < BTRFS_QGROUP_VER):
             return 0
@@ -929,6 +957,7 @@ def do_df(parse_args):
             cmd = [BTRFS,'filesystem', 'show', fs['real_dev']]
             cmd_output = cmd_stdout(cmd).splitlines()
             output = {}
+            mnt_pt = fs['Mounted on']
             if (fs['Mounted on'] == '/'):
                 mounted_on = '/' + 'BLOCK'
             else:
@@ -948,12 +977,12 @@ def do_df(parse_args):
                 device['Used'] = to_bytes(line[5].rstrip('Bi'))
                 device['Available'] = device['Size'] - device['Used']
                 device['Use%'] = 100 * float(device['Used']/device['Size'])
-                device['real_dev'] = line[7]
+                device['mnt_dev'] = line[7]
                 device['Type'] = 'btrfs'
                 if (count == 1):
                     device['Filesystem'] = fs['Filesystem'] + '/' + 'BLOCK'
                 else:
-                    device['Filesystem'] = device['real_dev'] + '/' + 'BLOCK'
+                    device['Filesystem'] = device['mnt_dev'] + '/' + 'BLOCK'
                 device['Mounted on'] = mounted_on
                 output[device['Filesystem']] = device
 
@@ -972,6 +1001,13 @@ def do_df(parse_args):
             # Insert into output dict
             df_output_dict = working_set['df_output_dict']
             for device in output:
+                # Skip if not 'lead' volume in a btrfs FS
+                fs_dev = working_set['btrfs_mnt_devs'].get(mnt_pt)
+                if not fs_dev:
+                    continue
+                if (working_set['btrfs_allvols'][fs_dev][0] 
+                        != mnt_pt):
+                    continue
                 df_output_dict[line['Mounted on']] = line
 
     def display_output(parse_args, working_set):
@@ -985,7 +1021,7 @@ def do_df(parse_args):
         for k in working_set["df_output_dict"]:
             fs = working_set["df_output_dict"][k]
             max_len = dict([(k2, max(max_len[k2], len(fs[k2]))) for k2 in fs 
-                                            if (k2 not in ('real_dev', 'UUID', 'blkid'))])
+                                            if (k2 not in ('real_dev', 'UUID', 'blkid', 'mnt_dev'))])
 
         df_header = working_set['df_output_dict']['df_header']
 
@@ -996,6 +1032,33 @@ def do_df(parse_args):
             fs = working_set["df_output_dict"][m]
             mnt_output_dict[fs['Mounted on']] = fs
 
+        # Work out print out order
+        # Work through df output order, group btrfs FS together based on when
+        # First subvolume appears
+        output_order = []
+        mnts = mnt_output_dict.keys()
+        df_output_order = working_set['df_output_order']
+        btrfs_mnt_devs = working_set['btrfs_mnt_devs']
+        btrfs_allvols = working_set['btrfs_allvols']
+        
+        for mnt in df_output_order:
+            if mnt in output_order:
+                continue
+            mnt_dev = btrfs_mnt_devs[mnt]
+            if mnt_dev in working_set['btrfs_blkid_devs']:
+                # Gather and add all BTRFS subvols
+                mnt_list = [m for m in btrfs_allvols[mnt_dev] if m in mnts]
+                m = mnt_list[0]
+                for s in ('SYSTEM', 'METADATA', 'DATA', 'BLOCK'):
+                    if not m.endswith('/'):
+                        s = '/' + s
+                    if (m + s) in mnts:
+                        mnt_list.insert(1, m + s)
+                output_order += mnt_list
+                continue
+            if mnt in mnts:
+                output_order.append(mnt)
+
         if (not '-T' in df_arg_list and not '--print-type' in df_arg_list):
             print('%s %s %s %s %s %s' 
                 % ( df_header['Filesystem'].ljust(max(max_len['Filesystem'], 14)),
@@ -1005,7 +1068,7 @@ def do_df(parse_args):
                     df_header['Use%'].rjust(max_len['Use%']),
                     df_header['Mounted on'].rjust(max_len['Mounted on'])
                     ), file=sys.stdout)
-            for k in sorted(mnt_output_dict.keys()):
+            for k in output_order:
                 fs = mnt_output_dict[k]
                 print('%s %s %s %s %s %s' 
                     % ( fs['Filesystem'].ljust(max(max_len['Filesystem'], 14)),
@@ -1025,7 +1088,7 @@ def do_df(parse_args):
                     df_header['Use%'].rjust(max_len['Use%']),
                     df_header['Mounted on'].rjust(max_len['Mounted on'])
                     ), file=sys.stdout)
-            for k in sorted(mnt_output_dict.keys()):
+            for k in output_order:
                 fs = mnt_output_dict[k]
                 print('%s %s %s %s %s %s %s'
                     % ( fs['Filesystem'].ljust(max(max_len['Filesystem'], 14)),
