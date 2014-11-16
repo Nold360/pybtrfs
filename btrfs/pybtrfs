@@ -891,7 +891,7 @@ def do_df(parse_args):
         btrfs_tools_modern = (btrfs_tools_version 
                                             >= BTRFS_QGROUP_LIMIT_DISPLAY_VER)
         btrfs_allvols = working_set['btrfs_allvols']
-        if (btrfs_tools_version >= BTRFS_QGROUP_LIMIT_DISPLAY_VER):
+        if btrfs_tools_modern:
             root_list = [btrfs_allvols[dev][0] for dev 
                            in working_set['btrfs_blkid_devs']]
         else:
@@ -932,7 +932,7 @@ def do_df(parse_args):
 
                 subvol = subvolume_data.get(int(subvolume_id))
 
-                if (btrfs_tools_modern):
+                if btrfs_tools_modern:
                     try:
                         limit = float(args[3])
                     except (TypeError, ValueError):
@@ -958,7 +958,6 @@ def do_df(parse_args):
                 except KeyError:
                     pass
                 try:
-                    import pdb; pdb.set_trace()
                     if subvolume_name.startswith('<FS_TREE>'):
                         tag = 'subvol=' + subvol_name[9:]
                     elif subvolume_name.startswith('/'):
