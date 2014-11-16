@@ -699,6 +699,11 @@ def do_df(parse_args):
         df_output_dict['df_header']['Size'] = df_header_sizeword
         df_output_dict['df_header']['Available'] = df_header_availableword
         df_output_order = []
+        proto_df_output = {}
+        for fs in df_output[1:]:
+            entry = dict(zip(df_output[0], fs))
+            proto_df_output[entry['Mounted on']] = entry
+        working_set['df_fs_list'] = proto_df_output.keys()
         for fs in df_output[1:]:
             entry = dict(zip(df_output[0], fs))
             if (entry['Type'] != 'btrfs' and entry['Filesystem'] != '-'):
