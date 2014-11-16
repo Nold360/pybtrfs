@@ -888,19 +888,21 @@ def do_df(parse_args):
         if (btrfs_tools_version < BTRFS_QGROUP_VER):
             return 0
 
+        btrfs_tools_modern = (btrfs_tools_version 
+                                            >= BTRFS_QGROUP_LIMIT_DISPLAY_VER)
         btrfs_allvols = working_set['btrfs_allvols']
-        #if (btrfs_tools_version >= BTRFS_QGROUP_LIMIT_DISPLAY_VER):
-        #root_list = [btrfs_allvols[dev][0] for dev 
-        #                in working_set['btrfs_blkid_devs']]
-        #else:
-        root_list = working_set['btrfs_root_vols'].values()
+        if (btrfs_tools_version >= BTRFS_QGROUP_LIMIT_DISPLAY_VER):
+            root_list = [btrfs_allvols[dev][0] for dev 
+                           in working_set['btrfs_blkid_devs']]
+        else:
+            root_list = working_set['btrfs_root_vols'].values()
         btrfs_list = [fs for fs in working_set['btrfs_list']
                         if fs['Mounted on'] in root_list]
         
         for fs in btrfs_list:
             try:
                 cmd = [BTRFS, "qgroup", "show"]
-                if (btrfs_tools_version >= BTRFS_QGROUP_LIMIT_DISPLAY_VER):
+                if btrfs_tools_modern:
                     cmd.append('-r')
                 cmd.append(fs["Mounted on"])
                 cmd_output = check_output(cmd, stderr=subprocess.STDOUT )
@@ -909,7 +911,10 @@ def do_df(parse_args):
 
             output = []
             subvolume_data = dict()
-            cmd = [BTRFS,  "subvolume", "list", fs['Mounted on']]
+            cmd = [BTRFS,  "subvolume", "list",]
+            if btrfs_tools_modern:
+                cmd.append('-a')
+            cmd.append(fs["Mounted on"])
             for line in cmd_stdout(cmd).splitlines():
                 args = line.strip().split(' ')
                 subvolume_data[int(args[1])] = args[-1]
@@ -927,7 +932,7 @@ def do_df(parse_args):
 
                 subvol = subvolume_data.get(int(subvolume_id))
 
-                if (btrfs_tools_version >= BTRFS_QGROUP_LIMIT_DISPLAY_VER):
+                if (btrfs_tools_modern):
                     try:
                         limit = float(args[3])
                     except (TypeError, ValueError):
@@ -953,7 +958,10 @@ def do_df(parse_args):
                 except KeyError:
                     pass
                 try:
-                    if subvolume_name.startswith('/'):
+                    import pdb; pdb.set_trace()
+                    if subvolume_name.startswith('<FS_TREE>'):
+                        tag = 'subvol=' + subvol_name[9:]
+                    elif subvolume_name.startswith('/'):
                         tag = 'subvol=' + subvolume_name
                     else:
                         tag = 'subvol=' + '/' + subvolume_name
