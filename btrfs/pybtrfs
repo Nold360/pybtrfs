@@ -621,19 +621,25 @@ def do_df(parse_args):
         btrfs_subvol_map = {}
         btrfs_root_vols = {}
         subvol_re = re.compile(r'\S*(subvol[^,]+)\S*')
+        # Read in fstab btrfs lines
+        fstab_lines = []
+        fstab = open('/etc/fstab', 'r')
+        for line in fstab:
+            if (line.find('btrfs') == -1):
+                continue
+            fstab_line = line.split()
+            line_dev = btrfs_mnt_devs.get(fstab_line[1])
+            if (not line_dev):
+                continue
+            fstab_lines.append(fstab_line)
+        fstab.close()
         # Scan to see if btrfs roots are mounted
         # Scan
         first = True
         for dev in btrfs_blkid_devs:
             btrfs_subvol_map[dev] = {}
-            fstab = open('/etc/fstab', 'r')
-            for line in fstab:
-                if (line.find('btrfs') == -1):
-                    continue
-                fstab_line = line.split()
+            for fstab_line in fstab_lines:
                 line_dev = btrfs_mnt_devs.get(fstab_line[1])
-                if (not line_dev):
-                    continue
                 if (line_dev != dev):
                     continue
                 if (fstab_line[3].find('subvol') != -1):
@@ -666,9 +672,7 @@ def do_df(parse_args):
                         btrfs_dbl_mnts.append(fstab_line[1])
                     continue
                 btrfs_allvols[dev].append(fstab_line[1])
-                if (btrfs_mnt_devs[fstab_line[1]] != root_dev):
-                    btrfs_mounts.append(fstab_line[1])
-            fstab.close()
+                btrfs_mounts.append(fstab_line[1])
             first = True
 
         def fn_sort(x,y): return(cmp(len(x), len(y)));
@@ -714,9 +718,11 @@ def do_df(parse_args):
                 df_output_order.append(entry['Mounted on'])
                 df_output_dict[entry['Mounted on']] = entry
                 continue
-            
+                
             # Working with BTRFS FS output
             mpt = entry['Mounted on']
+            if mpt.find('root-itch') != -1:
+                import pdb; pdb.set_trace()
             mpts = [ m for m in working_set['btrfs_mounts'] if mpt.find(m) != -1 ]
             if (len(mpts)):
                 entry['Mounted on'] = max(mpts, key=len)
@@ -1120,10 +1126,10 @@ def do_df(parse_args):
         btrfs_allvols = working_set['btrfs_allvols']
         btrfs_dbl_mnts = working_set['btrfs_dbl_mnts']
         
+        import pdb; pdb.set_trace()
         for mnt in df_output_order:
             if mnt in output_order:
                 continue
-            #import pdb; pdb.set_trace()
             mnt_dev = working_set['df_output_dict'][mnt].get('mnt_dev')
             if (mnt_dev and mnt_dev in working_set['btrfs_blkid_devs']):
                 # don't process if already mounted elsewhere
