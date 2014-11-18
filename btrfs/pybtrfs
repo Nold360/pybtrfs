@@ -672,7 +672,14 @@ def do_df(parse_args):
                         btrfs_dbl_mnts.append(fstab_line[1])
                     continue
                 btrfs_allvols[dev].append(fstab_line[1])
-                btrfs_mounts.append(fstab_line[1])
+                # Following is messy, O(n**2),  but it works
+                parent_fs_candidates = [m for m in btrfs_mnt_devs if fstab_line[1].find(m) != -1]
+                def fn_sort(x,y): return(cmp(len(x), len(y)));
+                parent_fs_candidates.sort(fn_sort)
+                # 1st level of FS mounts weeded out above
+                parent_fs = parent_fs_candidates[-2]
+                if btrfs_mnt_devs[parent_fs] != dev:
+                    btrfs_mounts.append(fstab_line[1])
             first = True
 
         def fn_sort(x,y): return(cmp(len(x), len(y)));
@@ -721,8 +728,6 @@ def do_df(parse_args):
                 
             # Working with BTRFS FS output
             mpt = entry['Mounted on']
-            if mpt.find('root-itch') != -1:
-                import pdb; pdb.set_trace()
             mpts = [ m for m in working_set['btrfs_mounts'] if mpt.find(m) != -1 ]
             if (len(mpts)):
                 entry['Mounted on'] = max(mpts, key=len)
@@ -1126,7 +1131,6 @@ def do_df(parse_args):
         btrfs_allvols = working_set['btrfs_allvols']
         btrfs_dbl_mnts = working_set['btrfs_dbl_mnts']
         
-        import pdb; pdb.set_trace()
         for mnt in df_output_order:
             if mnt in output_order:
                 continue
