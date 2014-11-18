@@ -1118,8 +1118,8 @@ def do_df(parse_args):
         for mnt in df_output_order:
             if mnt in output_order:
                 continue
-            mnt_dev = working_set['df_output_dict'][mnt]['mnt_dev']
-            if mnt_dev in working_set['btrfs_blkid_devs']:
+            mnt_dev = working_set['df_output_dict'][mnt].get('mnt_dev')
+            if (mnt_dev and mnt_dev in working_set['btrfs_blkid_devs']):
                 # Gather and add all BTRFS subvols
                 mnt_list = [m for m in btrfs_allvols[mnt_dev] if m in mnts]
                 m = mnt_list[0]
