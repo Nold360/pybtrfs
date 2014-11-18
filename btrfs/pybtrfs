@@ -616,6 +616,7 @@ def do_df(parse_args):
         mounts.close()
 
         btrfs_mounts = []
+        btrfs_dbl_mnts = []
         btrfs_allvols = {}
         btrfs_subvol_map = {}
         btrfs_root_vols = {}
@@ -661,7 +662,9 @@ def do_df(parse_args):
                     btrfs_mounts.append(fstab_line[1])
                     if (btrfs_mnt_devs[fstab_line[1]] != root_dev):
                         btrfs_allvols[dev].insert(0, fstab_line[1])
-                        continue
+                    else:
+                        btrfs_dbl_mnts.append(fstab_line[1])
+                    continue
                 btrfs_allvols[dev].append(fstab_line[1])
                 if (btrfs_mnt_devs[fstab_line[1]] != root_dev):
                     btrfs_mounts.append(fstab_line[1])
@@ -672,6 +675,7 @@ def do_df(parse_args):
         btrfs_mounts.sort(fn_sort)
 
         working_set['btrfs_mounts'] = btrfs_mounts
+        working_set['btrfs_dbl_mnts'] = btrfs_dbl_mnts
         working_set['btrfs_allvols'] = btrfs_allvols
         working_set['btrfs_subvol_map'] = btrfs_subvol_map
         working_set['btrfs_root_vols'] = btrfs_root_vols
@@ -1114,12 +1118,17 @@ def do_df(parse_args):
         df_output_order = working_set['df_output_order']
         btrfs_mnt_devs = working_set['btrfs_mnt_devs']
         btrfs_allvols = working_set['btrfs_allvols']
+        btrfs_dbl_mnts = working_set['btrfs_dbl_mnts']
         
         for mnt in df_output_order:
             if mnt in output_order:
                 continue
+            #import pdb; pdb.set_trace()
             mnt_dev = working_set['df_output_dict'][mnt].get('mnt_dev')
             if (mnt_dev and mnt_dev in working_set['btrfs_blkid_devs']):
+                # don't process if already mounted elsewhere
+                if mnt in btrfs_dbl_mnts:
+                    continue
                 # Gather and add all BTRFS subvols
                 mnt_list = [m for m in btrfs_allvols[mnt_dev] if m in mnts]
                 m = mnt_list[0]
