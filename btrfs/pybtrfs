@@ -734,7 +734,6 @@ def do_df(parse_args):
             else:
                 root_mpt = working_set['btrfs_root_vols'].get(dev)
 
-            
             mpts = [ m for m in working_set['btrfs_mounts'] if mpt.find(m) != -1 ]
             if (len(mpts)):
                 real_mpt = max(mpts, key=len)
@@ -749,7 +748,7 @@ def do_df(parse_args):
                 entry['blkid'] = working_set['blkid'].get(entry['Filesystem'])
                 
                 # Insert btrfs root if not in df output for getting /DATA etc
-                if (root_mpt not in working_set['df_fs_list']):
+                if (root_mpt and root_mpt not in working_set['df_fs_list']):
                     root_entry = entry.copy()
                     root_entry['Mounted on'] = root_mpt
                     if root_mpt not in df_output_order:
