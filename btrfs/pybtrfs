@@ -932,8 +932,9 @@ def do_df(parse_args):
                                             >= BTRFS_QGROUP_LIMIT_DISPLAY_VER)
         btrfs_allvols = working_set['btrfs_allvols']
         if btrfs_tools_modern:
-            root_list = [btrfs_allvols[dev][0] for dev 
+            root_list = [btrfs_allvols.get(dev) for dev 
                            in working_set['btrfs_blkid_devs']]
+            root_list = [dev[0] for dev in root_list if dev != None]
         else:
             root_list = working_set['btrfs_root_vols'].values()
         btrfs_list = [fs for fs in working_set['btrfs_list']
