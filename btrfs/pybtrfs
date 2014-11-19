@@ -1162,7 +1162,6 @@ def do_df(parse_args):
         btrfs_allvols = working_set['btrfs_allvols']
         btrfs_dbl_mnts = working_set['btrfs_dbl_mnts']
        
-        import pdb; pdb.set_trace()
         for mnt in df_output_order:
             if mnt in output_order:
                 continue
