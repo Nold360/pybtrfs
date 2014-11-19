@@ -728,14 +728,35 @@ def do_df(parse_args):
                 
             # Working with BTRFS FS output
             mpt = entry['Mounted on']
+            dev = working_set['btrfs_mnt_devs'].get(mpt)
+            if (dev == working_set['root_dev']):
+                root_mpt = '/'
+            else:
+                root_mpt = working_set['btrfs_root_vols'].get(dev)
+
+            
             mpts = [ m for m in working_set['btrfs_mounts'] if mpt.find(m) != -1 ]
             if (len(mpts)):
-                entry['Mounted on'] = max(mpts, key=len)
+                real_mpt = max(mpts, key=len)
+            else:
+                real_mpt = None
+            
+            if (real_mpt):
+                entry['Mounted on'] = real_mpt
                 entry['Filesystem'] = working_set['btrfs_mnt_devs'][entry['Mounted on']] 
                 entry['Type'] = 'btrfs'
                 entry['UUID'] = working_set['blkid'].get(entry['Filesystem']).get('UUID')
                 entry['blkid'] = working_set['blkid'].get(entry['Filesystem'])
                 
+                # Insert btrfs root if not in df output for getting /DATA etc
+                if (root_mpt not in working_set['df_fs_list']):
+                    root_entry = entry.copy()
+                    root_entry['Mounted on'] = root_mpt
+                    if root_mpt not in df_output_order:
+                        df_output_order.append(root_mpt)
+                    df_output_dict[root_mpt] = root_entry
+
+                # Add adjusted entry to output
                 if entry['Mounted on'] not in df_output_order:
                     df_output_order.append(entry['Mounted on'])
                 df_output_dict[entry['Mounted on']] = entry
