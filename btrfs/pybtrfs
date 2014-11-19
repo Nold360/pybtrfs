@@ -974,7 +974,7 @@ def do_df(parse_args):
                 subvol = subvolume_data.get(int(subvolume_id))
 
                 if btrfs_tools_modern:
-                    # This check is more efficient here if it can be done.
+                    # This check is more efficient if it can be done here.
                     try:
                         limit = float(args[3])
                     except (TypeError, ValueError):
@@ -1015,9 +1015,6 @@ def do_df(parse_args):
                 # Test mount point via os.stat
                 try:
                     os.stat(mounted_on)
-                    btrfs_subvols = working_set['btrfs_allvols'][fs['mnt_dev']]
-                    if mounted_on not in btrfs_subvols:
-                        btrfs_subvols.append(mounted_on)
                 except (OSError, IOError) as exc:
                     if (exc.errno == errno.ENOENT):
                         print("%s: mount point '%s' for subvol "
@@ -1025,6 +1022,7 @@ def do_df(parse_args):
                                     % (progname, mounted_on, subvolume_name),
                                     file=sys.stderr)
                         sys.exit(os.EX_CONFIG)
+                        raise exc
                 
                 if not btrfs_tools_modern:
                     # Get limit out of DBM file
@@ -1039,6 +1037,7 @@ def do_df(parse_args):
 
                 output.append({'Mounted on': mounted_on,
                     'Filesystem': file_system,
+                    'mnt_dev': fs['mnt_dev'],
                     'Used': total,
                     'Size': limit,
                     'Available': limit - total,
@@ -1057,13 +1056,17 @@ def do_df(parse_args):
                                         human_output)
 
             df_output_dict = working_set['df_output_dict']
+            btrfs_subvols = working_set['btrfs_allvols'][fs['mnt_dev']]
             for line in output:
                 if working_set['df_fs_list']:
                     in_df_fs_list = [ fs for fs in working_set['df_fs_list'] 
                             if line['Mounted on'].find(fs) != -1 ]
                     if (len(in_df_fs_list) == 0):
                         continue
-                df_output_dict[line['Mounted on']] = line
+                mounted_on = line['Mounted on']
+                if mounted_on not in btrfs_subvols:
+                    btrfs_subvols.append(mounted_on)
+                df_output_dict[mounted_on] = line
 
     def do_btrfs_filesystem_show(parse_args, working_set):
         """
@@ -1158,7 +1161,8 @@ def do_df(parse_args):
         btrfs_mnt_devs = working_set['btrfs_mnt_devs']
         btrfs_allvols = working_set['btrfs_allvols']
         btrfs_dbl_mnts = working_set['btrfs_dbl_mnts']
-        
+       
+        import pdb; pdb.set_trace()
         for mnt in df_output_order:
             if mnt in output_order:
                 continue
