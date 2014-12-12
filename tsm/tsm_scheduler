@@ -16,6 +16,14 @@
 # Short-Description: TSM ischeduler
 # Description: Start dsmc sched to enable scheduler.
 ### END INIT INFO
+#
+# INSTALLATION
+#
+# cp tsm_scheduler /etc/init.d
+# chown root:root /etc/init.d/tsm_scheduler
+# chmod 755 /etc/init.d/tsm_scheduler
+# insserv /etc/init.d/tsm_scheduler
+#
 
 # Exit if there is an unexpected error, in case of possible damage from continuing
 set -e
