@@ -4,75 +4,102 @@
 # DATE: 170513
 # FUNCTION: Manage TSM scheduler
 # NOTE: must use bash as shell else functions dont work as expected
+# AUTHOR: Matt Grant
+# FUNCTION: Fixed up script to work consistently
+# DATE: 121214
+### BEGIN INIT INFO
+# Provides: dsmc sched
+# Required-Start: $local_fs $remote_fs $network
+# Required-Stop:
+# Default-Start: 3 5
+# Default-Stop: 0 1 2 6
+# Short-Description: TSM ischeduler
+# Description: Start dsmc sched to enable scheduler.
+### END INIT INFO
+
+# Exit if there is an unexpected error, in case of possible damage from continuing
+set -e
+
+# work out where dsmc is installed, and run from for sensible working directory
+DAEMON="dsmc"
+DSMC_BIN=`which $DAEMON`
+# Be nice if TSM uninstalled
+[ -x "${DSMC_BIN}" ] || exit 0
+
+TSM_BIN=`readlink -f ${DSMC_BIN}`
+TSM_BIN_DIR=`dirname ${TSM_BIN}`
 
 check ()
 # check status of scheduler return 0 if found else return 1
 {
-ps -ef | grep dsmc | grep -v grep > /dev/null
-if [ $? -eq 0 ]
-then
-  return 0
-else
-  return 1
-fi
+	return pgrep $DAEMON > /dev/null 2>&1
 }
 
-start ()
-#
-{
-echo ""
-nohup /usr/bin/dsmc sched &
+start () {
+	# CD to sane directory, Do the double fork, etc
+	echo -n "Starting ${DAEMON}... "
+	cd $TSM_BIN_DIR; nohup $DSMC_BIN sched 0<&- &>/dev/null &
+	echo "done."
 }
 
 stop ()
 #
 {
-PID=`ps -ef | grep "/usr/bin/dsmc" | grep -v grep | tr -s " " " " | cut -d " " -f2`
+  echo -n "Stopping ${DAEMON}... "
+PID=`ps -ef | grep "${DSMC_BIN}" | grep -v grep | tr -s " " " " | cut -d " " -f2` || true
+if [ -z "$PID" ]; then
+	# Not running...
+	echo "not running."
+	return 0
+fi
 # double check
-ps -p $PID -o comm | tail -n1 | grep "dsmc" > /dev/null
-if [ $? -ne 0 ]
-then
-  echo "NOT stopping $PID - may not be correct process"
+if ! ps -p "$PID" -o comm | tail -n1 | grep -q "$DAEMON"; then
+  echo "NOT stopping $PID - not correct process."
+  exit 1
 else
-  echo "Stopping $PID"
   kill $PID
 fi
+echo "done."
 }
 
 restart ()
 #
 {
-stop
-sleep 5
-start
+	stop
+	sleep 5
+	start
 }
 
-status ()
-#
-{
-ps -ef | grep dsmc | grep -v grep > /dev/null
-if [ $? -eq 0 ]
-then
-  echo "Scheduler appears to be running"
-else
-  echo "Scheduler appears NOT to be running"
-fi
+status () {
+	if ps -ef | grep "$DAEMON" | grep -v grep > /dev/null; then
+  		echo "Scheduler appears to be running"
+	else
+  		echo "Scheduler appears NOT to be running"
+	fi
 }
 
 usage ()
 #
 {
-echo "$0 [start|stop|restart|status]"
-echo ""
-echo "This scripts manages the TSM scheduler for this Server"
+	echo "$0 [start|stop|restart|status]"
+	echo ""
+	echo "This scripts manages the TSM scheduler for this Server"
 }
 
 # script starts
 case $1 in
-"start") start;;
-"stop") stop;;
-"restart") restart;;
-"status") status;;
-*) usage ;;
+	"start")
+		start
+		;;
+	"stop") 
+		stop
+		;;
+	"restart")
+		restart
+		;;
+	"status")
+       		status
+		;;
+	*) usage ;;
 esac
 
