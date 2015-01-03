@@ -998,7 +998,7 @@ def do_df(parse_args):
                     pass
                 try:
                     if subvolume_name.startswith('<FS_TREE>'):
-                        tag = 'subvol=' + subvol_name[9:]
+                        tag = 'subvol=' + subvolume_name[9:]
                     elif subvolume_name.startswith('/'):
                         tag = 'subvol=' + subvolume_name
                     else:
