@@ -1038,8 +1038,6 @@ def do_df(parse_args):
                 if not btrfs_tools_modern:
                     # Get limit out of DBM file
                     limit_mpt = mounted_on
-                    if limit_mpt.startswith('/'):
-                        limit_mpt = limit_mpt[1:]
                     limit = get_limit(limit_mpt)
                     if (limit is None or limit <= 0):
                         continue
