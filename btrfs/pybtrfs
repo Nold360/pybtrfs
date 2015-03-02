@@ -146,6 +146,13 @@ def get_limit(path_key):
         path_key = '/' + path_key
     try:
         limit = db[path_key]
+    except KeyError:
+        try:
+            limit = db[path_key + '/']
+        except KeyError:
+            limit = None
+            return limit
+    try:
         unit = limit[-1]
         amount = int(limit[:-1])
         limit = amount * 1024 ** multiplicator_lookup.index(unit)
@@ -305,11 +312,15 @@ def do_qgroup_limit(parse_args):
         sys.exit(exit_code)
 
     db = dbm.open(LIMIT_DBM_FILE, 'c')
+    mount_point = parse_args.mount_point;
+    # Deal with trailing '/'
+    if (mount_point[-1] == '/'):
+      mount_point = mount_point[0:-1]
     if (parse_args.size and parse_args.size != 'none'):
-        db[parse_args.mount_point] = parse_args.size.upper()
+        db[mount_point] = parse_args.size.upper()
     elif (not parse_args.size or parse_args.size == 'none'):
         try:
-            db.pop(parse_args.mount_point)
+            db.pop(mount_point)
         except KeyError:
             pass
     db.close()
