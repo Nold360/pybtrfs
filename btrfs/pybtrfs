@@ -81,7 +81,7 @@ def get_btrfs_tools_version():
         sys.exit(os.EX_SOFTWARE)
     try:
         version = version_line[0].split()[1]
-        ver_re = re.compile(r'^v([0-9\.]+)\S*$')
+        ver_re = re.compile(r'^v([0-9]+\.[0-9]+)\S*$')
         version = ver_re.sub(r'\1', version)
         version = float(version)
     except:
@@ -998,7 +998,7 @@ def do_df(parse_args):
                     pass
                 try:
                     if subvolume_name.startswith('<FS_TREE>'):
-                        tag = 'subvol=' + subvolume_name[9:]
+                        tag = 'subvol=' + subvol_name[9:]
                     elif subvolume_name.startswith('/'):
                         tag = 'subvol=' + subvolume_name
                     else:
