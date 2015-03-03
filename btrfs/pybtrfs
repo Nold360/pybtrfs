@@ -188,8 +188,15 @@ def cmd_stdout(cmd, exit_on_error=True, suppress_stderr=False):
 
 def do_quota_display(parse_args):
 
+    working_set = dict()
+    scan_btrfs(parse_args, working_set)
+
+    mount_point = parse_args.mount_point
+    if mount_point.endswith('/'):
+        mount_point = mount_point[:-1]
+
     subvolume_data = dict()
-    cmd = [BTRFS,  "subvolume", "list", parse_args.mount_point]
+    cmd = [BTRFS,  "subvolume", "list", mount_point]
     for line in check_output(cmd).splitlines():
         args = line.strip().split(' ')
         subvolume_data[int(args[1])] = args[-1]
@@ -198,12 +205,12 @@ def do_quota_display(parse_args):
     cmd = [BTRFS, "qgroup", "show"]
     if (btrfs_tools_version >= BTRFS_QGROUP_LIMIT_DISPLAY_VER):
        cmd.append('-r')
-    cmd.append(parse_args.mount_point)
+    cmd.append(mount_point)
 
     try:
         cmd_output =  check_output(cmd, stderr=subprocess.STDOUT)
     except subprocess.CalledProcessError as exc:
-        print("%s: btrfs quota not enabled on '%s'" % (progname, parse_args.mount_point),
+        print("%s: btrfs quota not enabled on '%s'" % (progname, mount_point),
                 file=sys.stderr)
         sys.exit(exc.returncode)
 
@@ -219,8 +226,10 @@ def do_quota_display(parse_args):
         try:
             subvolume_id = args[0].split('/')[-1]
             subvolume_name = subvolume_data[int(subvolume_id)]
+            display_subvolume_name = subvolume_name
         except:
-            subvolume_name = "(unknown)"
+            subvolume_name = ''
+            display_subvolume_name = "(unknown)"
 
         # Get limit out of DBM file
         subvol = subvolume_data.get(int(subvolume_id))
@@ -230,7 +239,9 @@ def do_quota_display(parse_args):
             except (TypeError, ValueError):
                 limit = None
         else:
-            limit = get_limit(subvol)
+            mounted_on = get_mounted_on(working_set, mount_point,
+                    subvolume_name=subvolume_name, subvolume_id=subvolume_id)
+            limit = get_limit(mounted_on)
         if (limit is None):
             limit = '--'
             limit_unit = '-'
@@ -249,7 +260,7 @@ def do_quota_display(parse_args):
                 continue
             
             format_args = [
-                subvolume_name.ljust(30),
+                display_subvolume_name.ljust(30),
                 str(args[0]).rjust(10),
                 total.rjust(10), parse_args.unit,
                 limit.rjust(10), limit_unit,
@@ -571,6 +582,170 @@ def parse_df_args():
         setattr(parse_args, 'human_output', False)
     return parse_args
 
+def scan_btrfs(parse_args, working_set):
+    """
+    Scan system mount and block data to identify BTRFS
+    mount points, and subvolumes etc.
+    """
+
+    cmd = ['/sbin/blkid']
+    blkid_output = cmd_stdout(cmd)
+    blkid_output = blkid_output.splitlines()
+    blkids = {}
+    for line in blkid_output:
+        dev, rest = line.split(':',1)
+        blkid = {}
+        blkids[dev] = blkid
+        rest = rest.strip()
+        rest = rest.split('" ')
+        for b in rest:
+            thing = b.split('=')
+            if thing[1][-1] == '"':
+                blkid[thing[0].lower()] = thing[1][1:-1]
+            else:
+                blkid[thing[0].lower()] = thing[1][1:]
+    working_set['blkid'] = blkids
+
+    btrfs_blkid_devs = [d for d in blkids.keys()
+                            if blkids[d].get('type') == 'btrfs']
+    working_set['btrfs_blkid_devs'] = btrfs_blkid_devs
+
+    btrfs_mnt_devs = {}
+    mounts = open('/proc/mounts', 'r')
+    for line in mounts:
+        mount_line = line.split()
+        if (mount_line[1] == '/' and mount_line[0] != 'rootfs'):
+            root_dev = mount_line[0]
+        if (mount_line[2] != 'btrfs'):
+            continue
+        btrfs_mnt_devs[mount_line[1]] = mount_line[0]
+    working_set['btrfs_mnt_devs'] = btrfs_mnt_devs
+    working_set['root_dev'] = root_dev
+    mounts.close()
+
+    btrfs_mounts = []
+    btrfs_dbl_mnts = []
+    btrfs_allvols = {}
+    btrfs_subvol_map = {}
+    btrfs_root_vols = {}
+    subvol_re = re.compile(r'\S*(subvol[^,]+)\S*')
+    # Read in fstab btrfs lines
+    fstab_lines = []
+    fstab = open('/etc/fstab', 'r')
+    for line in fstab:
+        if (line.find('btrfs') == -1):
+            continue
+        fstab_line = line.split()
+        line_dev = btrfs_mnt_devs.get(fstab_line[1])
+        if (not line_dev):
+            continue
+        fstab_lines.append(fstab_line)
+    fstab.close()
+    # Scan to see if btrfs roots are mounted
+    # Scan
+    first = True
+    for dev in btrfs_blkid_devs:
+        btrfs_subvol_map[dev] = {}
+        for fstab_line in fstab_lines:
+            line_dev = btrfs_mnt_devs.get(fstab_line[1])
+            if (line_dev != dev):
+                continue
+            if (fstab_line[3].find('subvol') != -1):
+                subvol_info = subvol_re.sub(r'\1', fstab_line[3])
+                if subvol_info.startswith('subvolid='):
+                    vol_id = subvol_info.split('=')[1]
+                    if vol_id.find('/') != -1:
+                        vol_id = vol_id.split('/')[1]
+                        subvol_info = 'subvolid=' + vol_id
+                elif subvol_info.startswith('subvol='):
+                    vol_name = subvol_info.split('=')[1]
+                    if not vol_name.startswith('/'):
+                        vol_name = '/' + vol_name
+                        subvol_info = 'subvol=' + vol_name
+                btrfs_subvol_map[dev][subvol_info] = fstab_line[1]
+                subvol = None
+            if first:
+                first = False
+                btrfs_allvols[dev] = [fstab_line[1]]
+                btrfs_mounts.append(fstab_line[1])
+                continue
+            if (fstab_line[3].find('subvolid=0') != -1
+                    or fstab_line[3].find('subvolid=0/0') != -1
+                    or fstab_line[3].find('subvol=/') != -1):
+                btrfs_root_vols[dev] = fstab_line[1]
+                btrfs_mounts.append(fstab_line[1])
+                if (btrfs_mnt_devs[fstab_line[1]] != root_dev):
+                    btrfs_allvols[dev].insert(0, fstab_line[1])
+                else:
+                    btrfs_dbl_mnts.append(fstab_line[1])
+                continue
+            btrfs_allvols[dev].append(fstab_line[1])
+            # Following is messy, O(n**2),  but it works
+            parent_fs_candidates = [m for m in btrfs_mnt_devs if fstab_line[1].find(m) != -1]
+            def fn_sort(x,y): return(cmp(len(x), len(y)));
+            parent_fs_candidates.sort(fn_sort)
+            # 1st level of FS mounts weeded out above
+            parent_fs = parent_fs_candidates[-2]
+            if btrfs_mnt_devs[parent_fs] != dev:
+                btrfs_mounts.append(fstab_line[1])
+        first = True
+
+        def fn_sort(x,y): return(cmp(len(x), len(y)));
+        btrfs_mounts.sort(fn_sort)
+
+        working_set['btrfs_mounts'] = btrfs_mounts
+        working_set['btrfs_dbl_mnts'] = btrfs_dbl_mnts
+        working_set['btrfs_allvols'] = btrfs_allvols
+        working_set['btrfs_subvol_map'] = btrfs_subvol_map
+        working_set['btrfs_root_vols'] = btrfs_root_vols
+
+def get_mounted_on(working_set, fs_mounted_on, fs_mnt_dev=None,
+            subvolume_id=None, subvolume_name=''):
+    """
+    Given data in working_set from scan_btrfs(),
+    return actual mount point
+    """
+    if not(fs_mnt_dev):
+        fs_mnt_dev = working_set['btrfs_mnt_devs'].get(fs_mounted_on)
+    if not(fs_mnt_dev):
+        return None
+    # Fish for the mount point
+    mounted_on = None
+    btrfs_subvol_map = working_set['btrfs_subvol_map']
+    try:
+        tag = 'subvolid=' + str(subvolume_id)
+        mounted_on = btrfs_subvol_map[fs_mnt_dev][tag]
+    except KeyError:
+        pass
+    try:
+        if subvolume_name.startswith('<FS_TREE>'):
+            tag = 'subvol=' + subvol_name[9:]
+        elif subvolume_name.startswith('/'):
+            tag = 'subvol=' + subvolume_name
+        else:
+            tag = 'subvol=' + '/' + subvolume_name
+        mounted_on = btrfs_subvol_map[fs_mnt_dev][tag]
+    except KeyError:
+        pass
+    if not mounted_on:
+        if fs_mounted_on.endswith('/'):
+            mounted_on = fs_mounted_on + subvolume_name
+        else:
+            mounted_on = fs_mounted_on + '/' + subvolume_name
+
+    # Test mount point via os.stat
+    try:
+        os.stat(mounted_on)
+    except (OSError, IOError) as exc:
+        if (exc.errno == errno.ENOENT):
+            print("%s: mount point '%s' for subvol "
+                        "'%s' does not exist."
+                        % (progname, mounted_on, subvolume_name),
+                        file=sys.stderr)
+            sys.exit(os.EX_CONFIG)
+            raise exc
+    return mounted_on
+
 def do_df(parse_args):
     """
     Pybtrfs df action.  This is the business end where df output and btrfs
@@ -588,119 +763,6 @@ def do_df(parse_args):
                                                 if arg[0] != '-']
 
         return 0
-
-    def scan_btrfs(parse_args, working_set):
-
-        cmd = ['/sbin/blkid']
-        blkid_output = cmd_stdout(cmd)
-        blkid_output = blkid_output.splitlines()
-        blkids = {}
-        for line in blkid_output:
-            dev, rest = line.split(':',1)
-            blkid = {}
-            blkids[dev] = blkid
-            rest = rest.strip()
-            rest = rest.split('" ')
-            for b in rest:
-                thing = b.split('=')
-                if thing[1][-1] == '"':
-                    blkid[thing[0].lower()] = thing[1][1:-1]
-                else:
-                    blkid[thing[0].lower()] = thing[1][1:]
-        working_set['blkid'] = blkids
-        
-        btrfs_blkid_devs = [d for d in blkids.keys() 
-                                if blkids[d].get('type') == 'btrfs']
-        working_set['btrfs_blkid_devs'] = btrfs_blkid_devs
-
-        btrfs_mnt_devs = {}
-        mounts = open('/proc/mounts', 'r')
-        for line in mounts:
-            mount_line = line.split()
-            if (mount_line[1] == '/' and mount_line[0] != 'rootfs'):
-                root_dev = mount_line[0]
-            if (mount_line[2] != 'btrfs'):
-                continue
-            btrfs_mnt_devs[mount_line[1]] = mount_line[0]
-        working_set['btrfs_mnt_devs'] = btrfs_mnt_devs
-        working_set['root_dev'] = root_dev
-        mounts.close()
-
-        btrfs_mounts = []
-        btrfs_dbl_mnts = []
-        btrfs_allvols = {}
-        btrfs_subvol_map = {}
-        btrfs_root_vols = {}
-        subvol_re = re.compile(r'\S*(subvol[^,]+)\S*')
-        # Read in fstab btrfs lines
-        fstab_lines = []
-        fstab = open('/etc/fstab', 'r')
-        for line in fstab:
-            if (line.find('btrfs') == -1):
-                continue
-            fstab_line = line.split()
-            line_dev = btrfs_mnt_devs.get(fstab_line[1])
-            if (not line_dev):
-                continue
-            fstab_lines.append(fstab_line)
-        fstab.close()
-        # Scan to see if btrfs roots are mounted
-        # Scan
-        first = True
-        for dev in btrfs_blkid_devs:
-            btrfs_subvol_map[dev] = {}
-            for fstab_line in fstab_lines:
-                line_dev = btrfs_mnt_devs.get(fstab_line[1])
-                if (line_dev != dev):
-                    continue
-                if (fstab_line[3].find('subvol') != -1):
-                    subvol_info = subvol_re.sub(r'\1', fstab_line[3])
-                    if subvol_info.startswith('subvolid='):
-                        vol_id = subvol_info.split('=')[1]
-                        if vol_id.find('/') != -1:
-                            vol_id = vol_id.split('/')[1]
-                            subvol_info = 'subvolid=' + vol_id
-                    elif subvol_info.startswith('subvol='):
-                        vol_name = subvol_info.split('=')[1]
-                        if not vol_name.startswith('/'):
-                            vol_name = '/' + vol_name
-                            subvol_info = 'subvol=' + vol_name 
-                    btrfs_subvol_map[dev][subvol_info] = fstab_line[1]
-                    subvol = None
-                if first:
-                    first = False
-                    btrfs_allvols[dev] = [fstab_line[1]]
-                    btrfs_mounts.append(fstab_line[1])
-                    continue
-                if (fstab_line[3].find('subvolid=0') != -1
-                        or fstab_line[3].find('subvolid=0/0') != -1
-                        or fstab_line[3].find('subvol=/') != -1):
-                    btrfs_root_vols[dev] = fstab_line[1]
-                    btrfs_mounts.append(fstab_line[1])
-                    if (btrfs_mnt_devs[fstab_line[1]] != root_dev):
-                        btrfs_allvols[dev].insert(0, fstab_line[1])
-                    else:
-                        btrfs_dbl_mnts.append(fstab_line[1])
-                    continue
-                btrfs_allvols[dev].append(fstab_line[1])
-                # Following is messy, O(n**2),  but it works
-                parent_fs_candidates = [m for m in btrfs_mnt_devs if fstab_line[1].find(m) != -1]
-                def fn_sort(x,y): return(cmp(len(x), len(y)));
-                parent_fs_candidates.sort(fn_sort)
-                # 1st level of FS mounts weeded out above
-                parent_fs = parent_fs_candidates[-2]
-                if btrfs_mnt_devs[parent_fs] != dev:
-                    btrfs_mounts.append(fstab_line[1])
-            first = True
-
-        def fn_sort(x,y): return(cmp(len(x), len(y)));
-        btrfs_mounts.sort(fn_sort)
-
-        working_set['btrfs_mounts'] = btrfs_mounts
-        working_set['btrfs_dbl_mnts'] = btrfs_dbl_mnts
-        working_set['btrfs_allvols'] = btrfs_allvols
-        working_set['btrfs_subvol_map'] = btrfs_subvol_map
-        working_set['btrfs_root_vols'] = btrfs_root_vols
 
     def run_df(parse_args, working_set):
         """
@@ -998,43 +1060,12 @@ def do_df(parse_args):
 
                 # Now have limit, and and total used in subvolume qgroup,
                 # We can create line for df output.
-            
+                
                 # Fish for the mount point
-                mounted_on = None
-                btrfs_subvol_map = working_set['btrfs_subvol_map']
-                try:
-                    tag = 'subvolid=' + str(subvolume_id)
-                    mounted_on = btrfs_subvol_map[fs['mnt_dev']][tag]
-                except KeyError:
-                    pass
-                try:
-                    if subvolume_name.startswith('<FS_TREE>'):
-                        tag = 'subvol=' + subvol_name[9:]
-                    elif subvolume_name.startswith('/'):
-                        tag = 'subvol=' + subvolume_name
-                    else:
-                        tag = 'subvol=' + '/' + subvolume_name
-                    mounted_on = btrfs_subvol_map[fs['mnt_dev']][tag]
-                except KeyError:
-                    pass
-                if not mounted_on:
-                    if fs['Mounted on'].endswith('/'):
-                        mounted_on = fs['Mounted on'] + subvolume_name
-                    else:
-                        mounted_on = fs['Mounted on'] + '/' + subvolume_name
-                
-                # Test mount point via os.stat
-                try:
-                    os.stat(mounted_on)
-                except (OSError, IOError) as exc:
-                    if (exc.errno == errno.ENOENT):
-                        print("%s: mount point '%s' for subvol "
-                                    "'%s' does not exist."
-                                    % (progname, mounted_on, subvolume_name),
-                                    file=sys.stderr)
-                        sys.exit(os.EX_CONFIG)
-                        raise exc
-                
+                mounted_on = get_mounted_on(working_set, fs['Mounted on'],
+                                fs['mnt_dev'], subvolume_id=subvolume_id,
+                                subvolume_name=subvolume_name)
+
                 if not btrfs_tools_modern:
                     # Get limit out of DBM file
                     limit_mpt = mounted_on
