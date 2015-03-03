@@ -391,16 +391,17 @@ def do_qgroup_prune(parse_args):
             subvolume_names[subvolume_name] = subvolume_id
         
     # Prune DBM file
-    db = dbm.open(LIMIT_DBM_FILE, 'c')
-    existing_subvols = subvolume_names.keys()
-    delete_subvols = []
-    for k, v in db.iteritems():
-        if (k[1:] in existing_subvols):
-            continue
-        delete_subvols.push(k)
-    for k in delete_subvols:
-        db.pop(k)
-    db.close()
+    # This is problematic - commented it out - MAG
+    #db = dbm.open(LIMIT_DBM_FILE, 'c')
+    #existing_subvols = subvolume_names.keys()
+    #delete_subvols = []
+    #for k, v in db.iteritems():
+    #    if (k[1:] in existing_subvols):
+    #        continue
+    #    delete_subvols.append(k)
+    #for k in delete_subvols:
+    #    db.pop(k)
+    #db.close()
     return 0
 
 def format_bytes(bytes, pwr3_base, unit, human_output):
