@@ -12,6 +12,7 @@ import copy
 import re
 import math
 import atexit
+from itertools import chain
 
 # Handle Python 3 DBM module
 try:
@@ -192,7 +193,7 @@ def do_quota_display(parse_args):
     scan_btrfs(parse_args, working_set)
 
     mount_point = parse_args.mount_point
-    if mount_point.endswith('/'):
+    if (mount_point != '/' and mount_point.endswith('/')):
         mount_point = mount_point[:-1]
 
     subvolume_data = dict()
@@ -308,6 +309,22 @@ def parse_qgroup_limit_args():
 
 def do_qgroup_limit(parse_args):
 
+    mount_point = parse_args.mount_point;
+    # Deal with trailing '/'
+    if (mount_point != '/' and mount_point[-1] == '/'):
+        mount_point = mount_point[:-1]
+
+    if (btrfs_tools_version < BTRFS_QGROUP_LIMIT_DISPLAY_VER):
+        working_set = dict()
+        scan_btrfs(parse_args, working_set)
+        btrfs_mounts = list(chain.from_iterable(working_set['btrfs_allvols'].values()))
+        btrfs_mounts = [ x for x in btrfs_mounts
+                if not x.startswith('/srv/btrfs-root') ]
+        if (mount_point not in btrfs_mounts):
+            print("%s: '%s' is not a btrfs mount point." % (progname, mount_point),
+                    file=sys.stderr)
+            sys.exit(os.EX_USAGE)
+
     cmd = [BTRFS, 'qgroup', 'limit']
     if parse_args.e:
         cmd.append(parse_args.e)
@@ -323,10 +340,6 @@ def do_qgroup_limit(parse_args):
         sys.exit(exit_code)
 
     db = dbm.open(LIMIT_DBM_FILE, 'c')
-    mount_point = parse_args.mount_point;
-    # Deal with trailing '/'
-    if (mount_point[-1] == '/'):
-      mount_point = mount_point[0:-1]
     if (parse_args.size and parse_args.size != 'none'):
         db[mount_point] = parse_args.size.upper()
     elif (not parse_args.size or parse_args.size == 'none'):
@@ -701,7 +714,7 @@ def scan_btrfs(parse_args, working_set):
         working_set['btrfs_root_vols'] = btrfs_root_vols
 
 def get_mounted_on(working_set, fs_mounted_on, fs_mnt_dev=None,
-            subvolume_id=None, subvolume_name=''):
+            subvolume_id=None, subvolume_name='', exit_no_mount_point=False):
     """
     Given data in working_set from scan_btrfs(),
     return actual mount point
@@ -739,6 +752,8 @@ def get_mounted_on(working_set, fs_mounted_on, fs_mnt_dev=None,
         os.stat(mounted_on)
     except (OSError, IOError) as exc:
         if (exc.errno == errno.ENOENT):
+            if not (exit_no_mount_point):
+                return None
             print("%s: mount point '%s' for subvol "
                         "'%s' does not exist."
                         % (progname, mounted_on, subvolume_name),
