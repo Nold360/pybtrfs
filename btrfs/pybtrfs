@@ -317,7 +317,7 @@ def do_qgroup_limit(parse_args):
     if (btrfs_tools_version < BTRFS_QGROUP_LIMIT_DISPLAY_VER):
         working_set = dict()
         scan_btrfs(parse_args, working_set)
-        btrfs_mounts = list(chain.from_iterable(working_set['btrfs_allvols'].values()))
+        btrfs_mounts = working_set['btrfs_mnt_devs'].keys()
         btrfs_mounts = [ x for x in btrfs_mounts
                 if not x.startswith('/srv/btrfs-root') ]
         if (mount_point not in btrfs_mounts):
