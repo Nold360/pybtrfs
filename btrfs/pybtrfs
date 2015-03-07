@@ -29,6 +29,7 @@ BTRFS = '/sbin/btrfs'
 DF = '/bin/df'
 BTRFS_QGROUP_VER = float('0.20')
 BTRFS_QGROUP_LIMIT_DISPLAY_VER = float('3.12')
+BTRFS_QGROUP_SHOW_HUMAN_READABLE_VER = float('3.18')
 progname = os.path.basename(sys.argv[0])
 db = None    
 
@@ -204,6 +205,8 @@ def do_quota_display(parse_args):
 
     
     cmd = [BTRFS, "qgroup", "show"]
+    if (btrfs_tools_version >= BTRFS_QGROUP_SHOW_HUMAN_READABLE_VER):
+        cmd.append('--raw')
     if (btrfs_tools_version >= BTRFS_QGROUP_LIMIT_DISPLAY_VER):
        cmd.append('-r')
     cmd.append(mount_point)
@@ -424,7 +427,10 @@ def format_bytes(bytes, pwr3_base, unit, human_output):
     unit_output = False
     if human_output:
         unit_output = True
-        pwr_of = int(math.log(bytes, pwr3_base))
+        if (bytes == 0):
+            pwr_of = 0
+        else:
+            pwr_of = int(math.log(bytes, pwr3_base))
         unit = multiplicator_lookup[pwr_of]
     elif unit:
         unit_output = False
@@ -1032,6 +1038,8 @@ def do_df(parse_args):
         for fs in btrfs_list:
             try:
                 cmd = [BTRFS, "qgroup", "show"]
+                if (btrfs_tools_version >= BTRFS_QGROUP_SHOW_HUMAN_READABLE_VER):
+                    cmd.append('--raw')
                 if btrfs_tools_modern:
                     cmd.append('-r')
                 cmd.append(fs["Mounted on"])
