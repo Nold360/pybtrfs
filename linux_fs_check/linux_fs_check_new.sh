@@ -143,7 +143,7 @@ check_df ()
 		fi
 		# skip if fs on exclusion list
 		if echo "$SKIP_LIST" | grep -q "$MOUNT_PT"; then
-			if [ $DEBUG ]; then echo "$1 on Skip list -ignoring"; fi
+			if [ $DEBUG ]; then echo "$MOUNT_PT on Skip list -ignoring"; fi
 			continue
 		fi
 		# Skip BTRFS checks if there is unallocated BLOCK available
