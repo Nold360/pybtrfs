@@ -12,18 +12,15 @@
 #   If it is use value in list to compare against
 # Finally compare against default value (MAX_PERCENT)
 
-#MAILTO="george.rogers@foodstuffs-si.co.nz"
-#MAILTO="matt.grant@foodstuffs-si.co.nz"
-MAILTO="itbasissupport@foodstuffs-si.co.nz"
-MAILTO_DEBUG="matt.grant@foodstuffs-si.co.nz"
 DEBUG=""      # set to any value to turn debug on
-IGNORE_BLOCK="" # set if you want to ignore /BLOCK output
 TIME=`date`
 HOSTNAME=`hostname`
 
 #==============Config file here================
 # MAIL destination(s)
 MAILTO="itbasissupport@foodstuffs-si.co.nz"
+# Use this for DEBUG email
+MAILTO_DEBUG="matt.grant@foodstuffs-si.co.nz"
 # skip checking any filesystems in this list
 # Note that FS are on separate lines
 SKIP_LIST="
