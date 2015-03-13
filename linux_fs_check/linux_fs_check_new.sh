@@ -22,8 +22,12 @@ TIME=`date`
 HOSTNAME=`hostname`
 
 #==============Config file here================
+# MAIL destination(s)
+MAILTO="itbasissupport@foodstuffs-si.co.nz"
 # skip checking any filesystems in this list
-SKIP_LIST="/proc"
+# Note that FS are on separate lines
+SKIP_LIST="
+/proc"
 # Default warning value
 DF_MAX_PERCENT=90
 # specially check any filesystems in this list against given value
@@ -38,6 +42,8 @@ BTRFS_MAX_METADATA_PERCENT=75
 BTRFS_MAX_SYSTEM_PERCENT=75
 # BTRFS BLOCK check waterline
 BTRFS_BLOCK_CHECK_THRESHOLD=90
+# Ignore BLOCK for checks
+IGNORE_BLOCK="1"
 #==============Config file here================
 
 CFG_FILE="/etc/default/linux_fs_check_new"
@@ -47,6 +53,7 @@ PATH="$PATH:/sbin:/usr/sbin"
 DF="/usr/local/bin/pybtrfs"
 DF_SUBARG="df"
 PROGNAME=`basename $0`
+VERBOSE=""
 
 usage () {
 	echo 1>&2
@@ -54,6 +61,7 @@ usage () {
 	echo 1>&2
 	echo "                  -d     turn on debug" 1>&2
 	echo "                  -h     display this help" 1>&2
+	echo "                  -v     verbose output" 1>&2
 	echo 1>&2
 	echo "                  Config file is '${CFG_FILE}'" 1>&2
 	echo 1>&2
@@ -61,9 +69,12 @@ usage () {
 }
 
 OPTIND=1
-while getopts dh F; do
+while getopts dhv F; do
 	case $F in
 	d)	DEBUG="1"
+		VERBOSE="1"
+		;;
+	v)	VERBOSE="1"
 		;;
 	h)	usage
 		exit 1
@@ -142,8 +153,8 @@ check_df ()
 			continue
 		fi
 		# skip if fs on exclusion list
-		if echo "$SKIP_LIST" | grep -q "$MOUNT_PT"; then
-			if [ $DEBUG ]; then echo "$MOUNT_PT on Skip list -ignoring"; fi
+		if echo "$SKIP_LIST" | grep -q "^$MOUNT_PT\$"; then
+			if [ $VERBOSE ]; then echo "$MOUNT_PT on Skip list -ignoring"; fi
 			continue
 		fi
 		# Skip BTRFS checks if there is unallocated BLOCK available
@@ -154,8 +165,8 @@ check_df ()
 			[ $DEBUG ] && echo "BLK_CHECK_PATH: $BLK_CHECK_PATH"
 			[ $DEBUG ] && echo "BLK_PERC: $BLK_PERC"
 			if [ $BLK_PERC -le $BTRFS_BLOCK_CHECK_THRESHOLD ]; then
-				[ $DEBUG ] && echo "Skipping btrfs $MOUNT_PT as there is unused BLOCK available - $BLK_PERC <= $BTRFS_BLOCK_CHECK_THRESHOLD"
-				continue
+				[ $VERBOSE ] && echo "$MOUNT_PT at ${BLK_PERC}% <= ${BTRFS_BLOCK_CHECK_THRESHOLD}% - skipped as there is unused BLOCK available"
+ 				continue
 			fi
 		fi
 
@@ -171,7 +182,7 @@ check_df ()
 			fi
 			MAX="$BTRFS_MAX_METADATA_PERCENT"
 		elif echo "$DF_EXCEPTION_LIST" | grep -qw "$MOUNT_PT"; then
-			if [ $DEBUG ]; then  
+			if [ $VERBOSE ]; then  
 				echo "$1 in Exception List" 
 			fi
 			MAX=`echo "$DF_EXCEPTION_LIST" | grep -w "$MOUNT_PT" | cut -d "," -f2`
@@ -186,8 +197,12 @@ check_df ()
 		fi
 		if [ $DF_PERCENT -ge $MAX ]
 		then
-			if [ $DEBUG ]; then echo "Found $MOUNT_PT at $DF_PERCENT - max is $MAX "; fi
-			alert "$MOUNT_PT" "Space" "$DF_PERCENT" "$MAX"
+			if [ $VERBOSE ]; then echo "$MOUNT_PT at ${DF_PERCENT}% - max is ${MAX}% "; fi
+			if [ -z "$VERBOSE" ]; then
+				alert "$MOUNT_PT" "Space" "$DF_PERCENT" "$MAX"
+			fi
+		else
+			if [ $VERBOSE ]; then echo "$MOUNT_PT at ${DF_PERCENT}% used."; fi
 		fi
 	done
 }
