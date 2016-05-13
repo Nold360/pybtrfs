@@ -1,7 +1,11 @@
 #!/usr/bin/env python
 #
+# Stripped down Version of "pybtrfs" (https://github.com/grantma/pybtrfs)
+# Only supporting the "df" part of pybtrfs.
+#
 # Copyright (c) Foodstuffs (South Island) Limited,
 #               Christchurch, New Zealand 2014-2015
+#               Gerrit Pannek,            2016
 #
 #    This file is part of pybtrfs.
 #
@@ -32,6 +36,7 @@ import re
 import math
 import atexit
 from itertools import chain
+from subprocess import check_output
 
 # Handle Python 3 DBM module
 try:
@@ -43,51 +48,13 @@ multiplicator_lookup = ['B', 'K', 'M', 'G', 'T', 'P']
 BLK_FORMAT="%01.0f"
 SMALL_BLK_FORMAT="%01.1f"
 PERC_FORMAT="%01.0f"
-LIMIT_DBM_FILE = '/var/lib/misc/pybtrfs_qgroup_limit.dbm'
 BTRFS = '/sbin/btrfs'
 DF = '/bin/df'
 BTRFS_QGROUP_VER = float('0.20')
 BTRFS_QGROUP_LIMIT_DISPLAY_VER = float('3.12')
 BTRFS_QGROUP_SHOW_HUMAN_READABLE_VER = float('3.18')
 progname = os.path.basename(sys.argv[0])
-db = None    
-
-
-# Deal with missing function from v2.6 subprocess module
-try:
-    from subprocess import check_output
-except ImportError:
-    def check_output(*popenargs, **kwargs):
-        r"""Run command with arguments and return its output as a byte string.
-
-        If the exit code was non-zero it raises a CalledProcessError.  The
-        CalledProcessError object will have the return code in the returncode
-        attribute and output in the output attribute.
-
-        The arguments are the same as for the Popen constructor. Example:
-
-        >>> check_output(["ls", "-l", "/dev/null"])
-        'crw-rw-rw- 1 root root 1, 3 Oct 18  2007 /dev/null\n'
-
-        The stdout argument is not allowed as it is used internally.
-        To capture standard error in the result, use stderr=STDOUT.
-
-        >>> check_output(["/bin/sh", "-c",
-        ...               "ls -l non_existent_file ; exit 0"],
-        ...              stderr=STDOUT)
-        'ls: non_existent_file: No such file or directory\n'
-        """
-        if 'stdout' in kwargs:
-            raise ValueError('stdout argument not allowed, it will be overridden.')
-        process = subprocess.Popen(stdout=subprocess.PIPE, *popenargs, **kwargs)
-        output, unused_err = process.communicate()
-        retcode = process.poll()
-        if retcode:
-            cmd = kwargs.get("args")
-            if cmd is None:
-                cmd = popenargs[0]
-            raise subprocess.CalledProcessError(retcode, cmd)
-        return output
+db = None
 
 def get_btrfs_tools_version():
     """
@@ -96,7 +63,7 @@ def get_btrfs_tools_version():
     cmd = [BTRFS, '--version']
     cmd_output = cmd_stdout(cmd, exit_on_error=False, suppress_stderr=True)
     cmd_output = cmd_output.splitlines()
-    version_line = [ line for line in cmd_output if line[:5] == 'Btrfs']
+    version_line = [ line for line in cmd_output if line[1:5] == 'trfs']
     if (len(version_line) != 1):
         print("%s: Can't determine btrfs progs version." % progname, file=sys.stderr)
         sys.exit(os.EX_SOFTWARE)
@@ -110,77 +77,6 @@ def get_btrfs_tools_version():
         sys.exit(os.EX_SOFTWARE)
     return version
 
-def parse_quota_display_args():
-    parser = argparse.ArgumentParser(prog=progname+' quota display',
-        description='Displays quota groups from a BTRFS filesystem readably'
-    )
-    parser.add_argument(
-        '-u', '--unit', metavar='U', type=str,
-        default='G',
-        help='SI Unit, [B]ytes, K, M, G, T, P',
-    )
-    parser.add_argument(
-        'mount_point', metavar='PATH', type=str,
-        default='/',
-        help='BTRFS mount point',
-    )
-    sys.argv.pop(2)
-    sys.argv.pop(1)
-    result = dict()
-    result = parser.parse_args()
-    return result
-
-def close_db():
-    """
-    Clean up open dbm data base
-    """
-
-    global db
-    
-    if db:
-        db.close()
-    return None
-
-atexit.register(close_db)
-
-def get_limit(path_key):
-    
-    global db
-
-    try:
-        db = dbm.open(LIMIT_DBM_FILE, 'r')
-    except dbm.error:
-        db = None
-    except (OSError, IOError) as exc:
-        if (errno == errno.ENOENT):
-            db = None
-        else:
-            raise exc
-
-    if (not db):
-        return None
-    if (path_key is None):
-        return None
-    if (path_key[0] == '@'):
-        path_key = '/' + path_key[1:]
-    elif path_key[0] != '/':
-        path_key = '/' + path_key
-    try:
-        limit = db[path_key]
-    except KeyError:
-        try:
-            limit = db[path_key + '/']
-        except KeyError:
-            limit = None
-            return limit
-    try:
-        unit = limit[-1]
-        amount = int(limit[:-1])
-        limit = amount * 1024 ** multiplicator_lookup.index(unit)
-    except:
-        limit = None
-    return limit
-
 def cmd_stdout(cmd, exit_on_error=True, suppress_stderr=False):
     try:
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE,
@@ -192,7 +88,7 @@ def cmd_stdout(cmd, exit_on_error=True, suppress_stderr=False):
             if cmd_stderr:
                 print(cmd_stderr, file=sys.stderr)
             sys.exit(retcode)
-            
+
     except (OSError, IOError) as exc:
         print("%s: %s - %s." % (progname, cmd[0], exc.strerror), file=sys.stderr)
         if (exc.errno in (errno.EACCES, errno.EEXIST)):
@@ -205,95 +101,7 @@ def cmd_stdout(cmd, exit_on_error=True, suppress_stderr=False):
         print(cmd_stderr, file=sys.stderr)
 
     return cmd_output
-        
 
-def do_quota_display(parse_args):
-
-    working_set = dict()
-    scan_btrfs(parse_args, working_set)
-
-    mount_point = parse_args.mount_point
-    if (mount_point != '/' and mount_point.endswith('/')):
-        mount_point = mount_point[:-1]
-
-    subvolume_data = dict()
-    cmd = [BTRFS,  "subvolume", "list", mount_point]
-    for line in check_output(cmd).splitlines():
-        args = line.strip().split(' ')
-        subvolume_data[int(args[1])] = args[-1]
-
-    
-    cmd = [BTRFS, "qgroup", "show"]
-    if (btrfs_tools_version >= BTRFS_QGROUP_SHOW_HUMAN_READABLE_VER):
-        cmd.append('--raw')
-    if (btrfs_tools_version >= BTRFS_QGROUP_LIMIT_DISPLAY_VER):
-       cmd.append('-r')
-    cmd.append(mount_point)
-
-    try:
-        cmd_output =  check_output(cmd, stderr=subprocess.STDOUT)
-    except subprocess.CalledProcessError as exc:
-        print("%s: btrfs quota not enabled on '%s'" % (progname, mount_point),
-                file=sys.stderr)
-        sys.exit(exc.returncode)
-
-    print("subvol\t\t\t\t    group         total       limit    unshared")
-    print("-" * 79)
-    for line in cmd_output.splitlines():
-        args = [x for x in line.strip().split(' ') if len(x)>0]
-
-        if args[0] in ('qgroupid', '--------'):
-             # Skip column headers
-             continue
-
-        try:
-            subvolume_id = args[0].split('/')[-1]
-            subvolume_name = subvolume_data[int(subvolume_id)]
-            display_subvolume_name = subvolume_name
-        except:
-            subvolume_name = ''
-            display_subvolume_name = "(unknown)"
-
-        # Get limit out of DBM file
-        subvol = subvolume_data.get(int(subvolume_id))
-        if (btrfs_tools_version >= BTRFS_QGROUP_LIMIT_DISPLAY_VER):
-            try:
-                limit = float(args[3])
-            except (TypeError, ValueError):
-                limit = None
-        else:
-            mounted_on = get_mounted_on(working_set, mount_point,
-                    subvolume_name=subvolume_name, subvolume_id=subvolume_id)
-            limit = get_limit(mounted_on)
-        if (limit is None):
-            limit = '--'
-            limit_unit = '-'
-        else:
-            limit_unit = parse_args.unit
-
-        multiplicator = 1024 ** multiplicator_lookup.index(parse_args.unit)
-
-        try:
-            try:
-                total = BLK_FORMAT % (float(args[1]) / multiplicator)
-                unshared = BLK_FORMAT % (float(args[2]) / multiplicator)
-                if (limit != '--'):
-                    limit = BLK_FORMAT % (float(limit) / multiplicator)
-            except ValueError:
-                continue
-            
-            format_args = [
-                display_subvolume_name.ljust(30),
-                str(args[0]).rjust(10),
-                total.rjust(10), parse_args.unit,
-                limit.rjust(10), limit_unit,
-                unshared.rjust(10), parse_args.unit
-            ]
-            print("%s  %s  %s%s %s%s %s%s" % tuple(format_args))
-        except IndexError:
-            pass
-    
-    return 0
 
 def parse_qgroup_limit_args():
     parser = argparse.ArgumentParser(prog=progname+' qgroup limit',
@@ -329,120 +137,6 @@ def parse_qgroup_limit_args():
     result = parser.parse_args()
     return result
 
-def do_qgroup_limit(parse_args):
-
-    mount_point = parse_args.mount_point;
-    # Deal with trailing '/'
-    if (mount_point != '/' and mount_point[-1] == '/'):
-        mount_point = mount_point[:-1]
-
-    if (btrfs_tools_version < BTRFS_QGROUP_LIMIT_DISPLAY_VER):
-        working_set = dict()
-        scan_btrfs(parse_args, working_set)
-        btrfs_mounts = working_set['btrfs_mnt_devs'].keys()
-        btrfs_mounts = [ x for x in btrfs_mounts
-                if not x.startswith('/srv/btrfs-root') ]
-        if (mount_point not in btrfs_mounts):
-            print("%s: '%s' is not a btrfs mount point." % (progname, mount_point),
-                    file=sys.stderr)
-            sys.exit(os.EX_USAGE)
-
-    cmd = [BTRFS, 'qgroup', 'limit']
-    if parse_args.e:
-        cmd.append(parse_args.e)
-    if parse_args.c:
-        cmd.append(parse_args.c)
-    cmd.append(parse_args.size)
-    if parse_args.qgroupid:
-        cmd.append(parse_args.qgroupid)
-    cmd.append(parse_args.mount_point)
-    exit_code = subprocess.check_call(cmd)
-  
-    if (exit_code != 0):
-        sys.exit(exit_code)
-
-    db = dbm.open(LIMIT_DBM_FILE, 'c')
-    if (parse_args.size and parse_args.size != 'none'):
-        db[mount_point] = parse_args.size.upper()
-    elif (not parse_args.size or parse_args.size == 'none'):
-        try:
-            db.pop(mount_point)
-        except KeyError:
-            pass
-    db.close()
-
-    return exit_code
-
-def parse_qgroup_prune_args():
-    parser = argparse.ArgumentParser(prog=progname+' qgroup prune',
-        description='Prune unattached qgroups from a BTRFS file system'
-    )
-    parser.add_argument(
-        'mount_point', metavar='PATH', type=str,
-        default='/',
-        help='BTRFS mount point',
-    )
-
-    sys.argv.pop(2)
-    sys.argv.pop(1)
-    result = parser.parse_args()
-    return result
-
-def do_qgroup_prune(parse_args):
-    
-    subvolume_names = dict()
-    subvolume_data = dict()
-
-
-    cmd = [BTRFS, "qgroup", "show", parse_args.mount_point]
-    try:
-        cmd_output = check_output(cmd, stderr=subprocess.STDOUT)
-    except subprocess.CalledProcessError as exc:
-        # Commented out so that command can be used from crontab
-        #print("%s: btrfs quota not enabled on '%s'" % (progname, parse_args.mount_point),
-        #        file=sys.stderr)
-        #sys.exit(exc.returncode)
-        sys.exit(os.EX_OK)
-
-
-    cmd = [BTRFS,  "subvolume", "list", parse_args.mount_point]
-    for line in check_output(cmd).splitlines():
-        args = line.strip().split(' ')
-        subvolume_data[int(args[1])] = args[-1]
-
-    for line in cmd_output.splitlines():
-        
-        args = [x for x in line.strip().split(' ') if len(x)>0]
-
-	if args[0] in ('qgroupid', '--------'):
-             # Skip column headers
-             continue
-        try:
-            subvolume_id = args[0].split('/')[-1]
-            subvolume_name = subvolume_data[int(subvolume_id)]
-        except:
-            subvolume_name = None
-        
-        if (not subvolume_name):
-            subprocess.check_call([BTRFS, 'qgroup', 'destroy', args[0], 
-                parse_args.mount_point])
-        else:
-            subvolume_names[subvolume_name] = subvolume_id
-        
-    # Prune DBM file
-    # This is problematic - commented it out - MAG
-    #db = dbm.open(LIMIT_DBM_FILE, 'c')
-    #existing_subvols = subvolume_names.keys()
-    #delete_subvols = []
-    #for k, v in db.iteritems():
-    #    if (k[1:] in existing_subvols):
-    #        continue
-    #    delete_subvols.append(k)
-    #for k in delete_subvols:
-    #    db.pop(k)
-    #db.close()
-    return 0
-
 def format_bytes(bytes, pwr3_base, unit, human_output):
     """
     Take bytes, and produce printable string output
@@ -463,7 +157,7 @@ def format_bytes(bytes, pwr3_base, unit, human_output):
         unit_output = True
         unit += 'B'
     out_num = bytes / pwr3_base ** pwr_of
-    
+
     blk_format = BLK_FORMAT
     if (out_num < 10):
         blk_format = SMALL_BLK_FORMAT
@@ -516,11 +210,11 @@ class UnitAction(argparse.Action):
             elif (block_size == '1000'):
                 unit = 'K'
                 pwr3_base = 1000
-            elif (len(block_size) == 3 and (block_size[0] in multiplicator_lookup) 
+            elif (len(block_size) == 3 and (block_size[0] in multiplicator_lookup)
                     and block_size[1:-1] == 'iB'):
                 unit = block_size[0]
                 pwr3_base = 1024
-            elif (len(block_size) == 2 and (block_size[0] in multiplicator_lookup) 
+            elif (len(block_size) == 2 and (block_size[0] in multiplicator_lookup)
                     and block_size[1] == 'B'):
                 unit = block_size[0]
                 pwr3_base = 1000
@@ -528,7 +222,7 @@ class UnitAction(argparse.Action):
                 unit = block_size[0]
                 pwr3_base = 1024
             else:
-                print("%s: incorrect -B/--blocksize argument '%s' - see man (1) df SIZE" 
+                print("%s: incorrect -B/--blocksize argument '%s' - see man (1) df SIZE"
                         % (progname, block_size));
                 sys.exit(os.EX_USAGE)
             value = unit
@@ -550,7 +244,7 @@ class UnitAction(argparse.Action):
             human_output = True
             unit = ''
             pwr3_base = 1000
-        
+
         setattr(namespace, self.dest, value)
         setattr(namespace, 'unit', unit)
         setattr(namespace, 'pwr3_base', pwr3_base)
@@ -560,7 +254,7 @@ def parse_df_args():
     """
     Pybtrfs df argument handling
     """
-    parser = argparse.ArgumentParser(prog=progname+' df',
+    parser = argparse.ArgumentParser(prog=progname,
         description='Df including BTRFS Metadata, Data, and System space',
         conflict_handler='resolve'
     )
@@ -608,7 +302,6 @@ def parse_df_args():
         nargs='*',
         help='Path for df',
     )
-    sys.argv.pop(1)
     parse_args = parser.parse_args()
     # Process and determine unit for results
     try:
@@ -801,10 +494,10 @@ def do_df(parse_args):
         Convert input parse_args into df_arg_list
         """
         # working_set['df_arg_list'] = df_arg_list
-        working_set['df_arg_list'] = [arg for arg in sys.argv[1:] 
+        working_set['df_arg_list'] = [arg for arg in sys.argv[1:]
                                         if arg not in ('-A', '--btrfs-all')]
 
-        working_set['df_fs_list'] = [arg for arg in working_set['df_arg_list'] 
+        working_set['df_fs_list'] = [arg for arg in working_set['df_arg_list']
                                                 if arg[0] != '-']
 
         return 0
@@ -843,7 +536,7 @@ def do_df(parse_args):
                 df_output_order.append(entry['Mounted on'])
                 df_output_dict[entry['Mounted on']] = entry
                 continue
-                
+
             # Working with BTRFS FS output
             mpt = entry['Mounted on']
             dev = working_set['btrfs_mnt_devs'].get(mpt)
@@ -857,14 +550,14 @@ def do_df(parse_args):
                 real_mpt = max(mpts, key=len)
             else:
                 real_mpt = None
-            
+
             if (real_mpt):
                 entry['Mounted on'] = real_mpt
-                entry['Filesystem'] = working_set['btrfs_mnt_devs'][entry['Mounted on']] 
+                entry['Filesystem'] = working_set['btrfs_mnt_devs'][entry['Mounted on']]
                 entry['Type'] = 'btrfs'
                 entry['UUID'] = working_set['blkid'].get(entry['Filesystem']).get('UUID')
                 entry['blkid'] = working_set['blkid'].get(entry['Filesystem'])
-                
+
                 # Insert btrfs root if not in df output for getting /DATA etc
                 if (root_mpt and root_mpt not in working_set['df_fs_list']):
                     root_entry = entry.copy()
@@ -949,7 +642,7 @@ def do_df(parse_args):
 
             output = []
             for line in btrfs_output:
-                
+
                 # Parse a line
                 tag, rest = line.split(':')
                 tag = tag.strip()
@@ -964,7 +657,7 @@ def do_df(parse_args):
                 total = total.rstrip('Bi')
                 thing, used = used.split('=')
                 used = used.rstrip('Bi')
-            
+
                 # Store
                 output.append({'tag': tag, 'used': used, 'total': total})
 
@@ -997,7 +690,7 @@ def do_df(parse_args):
                 data['tag'] = 'data'
             else:
                 data = data
-            
+
             output2.append(system)
             output2.append(metadata)
             if len(data):
@@ -1012,7 +705,7 @@ def do_df(parse_args):
                 line['available'] = line['total'] - line['used']
                 line['used'] = format_bytes(line['used'], pwr3_base, unit, human_output)
                 line['total'] = format_bytes(line['total'], pwr3_base, unit, human_output)
-                line['available'] = format_bytes(line['available'], pwr3_base, unit, 
+                line['available'] = format_bytes(line['available'], pwr3_base, unit,
                                             human_output)
                 line['use_%'] = PERC_FORMAT % line['use_%'] + '%'
 
@@ -1046,18 +739,18 @@ def do_df(parse_args):
         if (btrfs_tools_version < BTRFS_QGROUP_VER):
             return 0
 
-        btrfs_tools_modern = (btrfs_tools_version 
+        btrfs_tools_modern = (btrfs_tools_version
                                             >= BTRFS_QGROUP_LIMIT_DISPLAY_VER)
         btrfs_allvols = working_set['btrfs_allvols']
         if btrfs_tools_modern:
-            root_list = [btrfs_allvols.get(dev) for dev 
+            root_list = [btrfs_allvols.get(dev) for dev
                            in working_set['btrfs_blkid_devs']]
             root_list = [dev[0] for dev in root_list if dev != None]
         else:
             root_list = working_set['btrfs_root_vols'].values()
         btrfs_list = [fs for fs in working_set['btrfs_list']
                         if fs['Mounted on'] in root_list]
-        
+
         for fs in btrfs_list:
             try:
                 cmd = [BTRFS, "qgroup", "show"]
@@ -1101,24 +794,17 @@ def do_df(parse_args):
                         limit = None
                     if (limit is None or limit <= 0):
                         continue
-                
+
                 total = int(args[1])
                 unshared = int(args[2])
 
                 # Now have limit, and and total used in subvolume qgroup,
                 # We can create line for df output.
-                
+
                 # Fish for the mount point
                 mounted_on = get_mounted_on(working_set, fs['Mounted on'],
                                 fs['mnt_dev'], subvolume_id=subvolume_id,
                                 subvolume_name=subvolume_name)
-
-                if not btrfs_tools_modern:
-                    # Get limit out of DBM file
-                    limit_mpt = mounted_on
-                    limit = get_limit(limit_mpt)
-                    if (limit is None or limit <= 0):
-                        continue
 
                 file_system = fs['Filesystem'] + '/' + subvolume_id
 
@@ -1139,14 +825,14 @@ def do_df(parse_args):
                 line['Use%'] = PERC_FORMAT % line['Use%'] + '%'
                 line['Used'] = format_bytes(line['Used'], pwr3_base, unit, human_output)
                 line['Size'] = format_bytes(line['Size'], pwr3_base, unit, human_output)
-                line['Available'] = format_bytes(line['Available'], pwr3_base, unit, 
+                line['Available'] = format_bytes(line['Available'], pwr3_base, unit,
                                         human_output)
 
             df_output_dict = working_set['df_output_dict']
             btrfs_subvols = working_set['btrfs_allvols'][fs['mnt_dev']]
             for line in output:
                 if working_set['df_fs_list']:
-                    in_df_fs_list = [ fs for fs in working_set['df_fs_list'] 
+                    in_df_fs_list = [ fs for fs in working_set['df_fs_list']
                             if line['Mounted on'].find(fs) != -1 ]
                     if (len(in_df_fs_list) == 0):
                         continue
@@ -1173,7 +859,7 @@ def do_df(parse_args):
             # Count number of devices
             count = 0
             for line in cmd_output:
-                if line.find('devid') != -1: 
+                if line.find('devid') != -1:
                     count += 1
             for line in cmd_output:
                 if (line.find('devid') == -1):
@@ -1183,10 +869,10 @@ def do_df(parse_args):
                 device['Size'] = to_bytes(line[3].rstrip('Bi'))
                 device['Used'] = to_bytes(line[5].rstrip('Bi'))
                 device['Available'] = device['Size'] - device['Used']
-		if (device['Size'] != 0):
+                if (device['Size'] != 0):
                     device['Use%'] = 100 * float(device['Used']/device['Size'])
-		else:
-		    device['Use%'] = '--'
+                else:
+                    device['Use%'] = '--'
                 device['mnt_dev'] = line[7]
                 device['Type'] = 'btrfs'
                 if (count == 1):
@@ -1202,13 +888,13 @@ def do_df(parse_args):
             human_output = parse_args.human_output
             for dev in output:
                 line = output[dev]
-		if line['Use%'] != '--':
+                if line['Use%'] != '--':
                     line['Use%'] = PERC_FORMAT % line['Use%'] + '%'
                 else:
                     line['Use%'] = '--'
                 line['Used'] = format_bytes(line['Used'], pwr3_base, unit, human_output)
                 line['Size'] = format_bytes(line['Size'], pwr3_base, unit, human_output)
-                line['Available'] = format_bytes(line['Available'], pwr3_base, unit, 
+                line['Available'] = format_bytes(line['Available'], pwr3_base, unit,
                                         human_output)
 
             # Insert into output dict
@@ -1218,7 +904,7 @@ def do_df(parse_args):
                 fs_dev = working_set['btrfs_mnt_devs'].get(mnt_pt)
                 if not fs_dev:
                     continue
-                if (working_set['btrfs_allvols'][fs_dev][0] 
+                if (working_set['btrfs_allvols'][fs_dev][0]
                         != mnt_pt):
                     continue
                 df_output_dict[line['Mounted on']] = line
@@ -1233,7 +919,7 @@ def do_df(parse_args):
         max_len = dict([(k, len(df_header[k])) for k in df_header])
         for k in working_set["df_output_dict"]:
             fs = working_set["df_output_dict"][k]
-            max_len = dict([(k2, max(max_len[k2], len(fs[k2]))) for k2 in fs 
+            max_len = dict([(k2, max(max_len[k2], len(fs[k2]))) for k2 in fs
                                             if (k2 not in ('real_dev', 'UUID', 'blkid', 'mnt_dev'))])
 
         df_header = working_set['df_output_dict']['df_header']
@@ -1254,7 +940,7 @@ def do_df(parse_args):
         btrfs_mnt_devs = working_set['btrfs_mnt_devs']
         btrfs_allvols = working_set['btrfs_allvols']
         btrfs_dbl_mnts = working_set['btrfs_dbl_mnts']
-       
+
         for mnt in df_output_order:
             if mnt in output_order:
                 continue
@@ -1277,7 +963,7 @@ def do_df(parse_args):
                 output_order.append(mnt)
 
         if (not '-T' in df_arg_list and not '--print-type' in df_arg_list):
-            print('%s %s %s %s %s %s' 
+            print('%s %s %s %s %s %s'
                 % ( df_header['Filesystem'].ljust(max(max_len['Filesystem'], 14)),
                     df_header['Size'].rjust(max_len['Size']),
                     df_header['Used'].rjust(max_len['Used']),
@@ -1287,7 +973,7 @@ def do_df(parse_args):
                     ), file=sys.stdout)
             for k in output_order:
                 fs = mnt_output_dict[k]
-                print('%s %s %s %s %s %s' 
+                print('%s %s %s %s %s %s'
                     % ( fs['Filesystem'].ljust(max(max_len['Filesystem'], 14)),
                         fs['Size'].rjust(max_len['Size']),
                         fs['Used'].rjust(max_len['Used']),
@@ -1316,7 +1002,7 @@ def do_df(parse_args):
                         fs['Use%'].rjust(max_len['Use%']),
                         fs['Mounted on'].ljust(max_len['Mounted on'])
                         ), file=sys.stdout)
-                
+
         return 0
 
 
@@ -1360,24 +1046,7 @@ btrfs_tools_version = get_btrfs_tools_version()
 
 argc = len(sys.argv)
 argv = sys.argv
-if (argc >= 3 and  argv[1] == 'qgroup' and argv[2] == 'limit'):
-    if (btrfs_tools_version >= BTRFS_QGROUP_LIMIT_DISPLAY_VER):
-        exit_code = os.execvpe(BTRFS, argv, os.environ)
-	sys.exit(exit_code)
-    parse_args = parse_qgroup_limit_args()
-    exit_code = do_qgroup_limit(parse_args)
-elif (argc >= 3 and argv[1] =='qgroup' and argv[2] == 'display'):
-    parse_args = parse_quota_display_args()
-    exit_code = do_quota_display(parse_args)
-elif (argc >= 3 and argv[1] =='qgroup' and argv[2] == 'prune'):
-    parse_args = parse_qgroup_prune_args()
-    exit_code = do_qgroup_prune(parse_args)
-elif (argc >= 2 and argv[1] == 'df'):
-    parse_args = parse_df_args()
-    exit_code = do_df(parse_args)
-else:
-    exit_code = os.execvpe(BTRFS, argv, os.environ)
+parse_args = parse_df_args()
+exit_code = do_df(parse_args)
 
 sys.exit(exit_code)
-    
-
